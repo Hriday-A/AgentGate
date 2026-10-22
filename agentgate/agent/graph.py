@@ -27,6 +27,7 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from ..llm import ToolCall
+from ..telemetry import tracer
 from .base import AgentResult, record
 from .browser import Snapshot
 from .toolbox import BROWSER_TOOLS, DONE, Outcome, Toolbox, _tool
@@ -61,6 +62,7 @@ MAX_REPLANS = 2
 
 class State(TypedDict, total=False):
     goal: str
+    hints: str             # lessons retrieved from memory, already formatted
     plan: list[str]
     step_idx: int
     call: ToolCall | None
@@ -116,16 +118,22 @@ class GraphAgent:
 
     def _build(self):
         g = StateGraph(State)
-        g.add_node("plan", self.plan)
-        g.add_node("execute", self.execute)
-        g.add_node("act", self.act)
-        g.add_node("verify", self.verify)
+        for name in ("plan", "execute", "act", "verify"):
+            g.add_node(name, self._traced(name, getattr(self, name)))
         g.add_edge(START, "plan")
         g.add_conditional_edges("plan", lambda s: END if s.get("stop") else "execute", ["execute", END])
         g.add_conditional_edges("execute", lambda s: END if s.get("stop") else "act", ["act", END])
         g.add_edge("act", "verify")
         g.add_conditional_edges("verify", self.route, ["plan", "execute", END])
         return g.compile()
+
+    @staticmethod
+    def _traced(name, fn):
+        """Wrap a node so each visit shows up as an OpenTelemetry span."""
+        def node(state: State) -> State:
+            with tracer.start_as_current_span(f"agent.{name}"):
+                return fn(state)
+        return node
 
     def route(self, state: State) -> str:
         if state.get("stop"):
@@ -134,13 +142,15 @@ class GraphAgent:
             return "plan"
         return "execute"
 
-    def run(self, goal: str, toolbox: Toolbox) -> AgentResult:
+    def run(self, goal: str, toolbox: Toolbox, hints: list[str] | None = None) -> AgentResult:
         self.toolbox = toolbox
         self.result = AgentResult(answer=None, stop_reason="max_steps")
+        formatted = ("\n\nLessons from previous runs (apply them when relevant):\n" +
+                     "\n".join(f"- {h}" for h in hints)) if hints else ""
         # Each action passes through 3 nodes; leave headroom for plan nodes.
         limit = self.max_steps * 3 + (MAX_REPLANS + 1) * 2 + 10
-        final = self.graph.invoke({"goal": goal, "plan": [], "step_idx": 0, "failures": 0, "replans": 0,
-                                   "actions": [], "feedback": "", "stop": None},
+        final = self.graph.invoke({"goal": goal, "hints": formatted, "plan": [], "step_idx": 0, "failures": 0,
+                                   "replans": 0, "actions": [], "feedback": "", "stop": None},
                                   {"recursion_limit": limit})
         self.result.stop_reason = final.get("stop") or "max_steps"
         self.result.plan = final.get("plan", [])
@@ -162,7 +172,7 @@ class GraphAgent:
         if replanning and state.get("replans", 0) >= MAX_REPLANS:
             return {"stop": "stuck"}
         done_steps = state["plan"][: state["step_idx"]] if replanning else []
-        prompt = f"Task: {state['goal']}\n\nCurrent page:\n{self.toolbox.observe()}"
+        prompt = f"Task: {state['goal']}{state.get('hints', '')}\n\nCurrent page:\n{self.toolbox.observe()}"
         if replanning:
             prompt += ("\n\nSteps already completed:\n" + "\n".join(f"- {s}" for s in done_steps) +
                        f"\n\nThe step \"{state['plan'][state['step_idx']]}\" failed repeatedly. Last error: "
@@ -187,7 +197,7 @@ class GraphAgent:
             notes = "\n\nExtracted invoice data:\n" + json.dumps(self.toolbox.extractions, indent=1)
         recent = "\n".join(f"  - {a}" for a in state.get("actions", [])[-6:]) or "  (none yet)"
         feedback = f"\n\n⚠ Your last action failed: {state['feedback']}" if state.get("feedback") else ""
-        prompt = (f"Task: {state['goal']}\n\nPlan:\n{_plan_text(state['plan'], state['step_idx'])}"
+        prompt = (f"Task: {state['goal']}{state.get('hints', '')}\n\nPlan:\n{_plan_text(state['plan'], state['step_idx'])}"
                   f"\n\nRecent actions:\n{recent}{notes}{feedback}\n\nCurrent page:\n{before.render()}")
         try:
             resp = self._llm_call(self.llm.complete, EXEC_SYSTEM, [{"role": "user", "text": prompt}], TOOLS)
@@ -220,6 +230,8 @@ class GraphAgent:
         call, outcome = state.get("call"), state["outcome"]
         after = self.toolbox.browser.snapshot()
         ok, feedback = verify(call, outcome, state.get("before"), after)
+        if hasattr(self.llm, "feedback"):
+            self.llm.feedback(ok)  # lets a learning router score the model that chose this action
         self.result.trace[-1]["verified"] = ok
         if feedback:
             self.result.trace[-1]["feedback"] = feedback

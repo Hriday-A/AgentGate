@@ -28,6 +28,7 @@ services:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
     volumes:
       - artifacts:/data
     ports:
@@ -47,6 +48,14 @@ services:
     build: .
     ports:
       - "5055:5055"
+
+  # Trace viewer at http://localhost:16686. Point the runner at it with
+  # OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 to see runner → API traces end to end.
+  jaeger:
+    image: jaegertracing/jaeger:latest
+    ports:
+      - "16686:16686"
+      - "4318:4318"
 
 volumes:
   pgdata:

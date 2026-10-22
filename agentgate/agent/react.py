@@ -41,9 +41,11 @@ class ReactAgent:
         self.llm = llm
         self.max_steps = max_steps
 
-    def run(self, goal: str, toolbox: Toolbox) -> AgentResult:
+    def run(self, goal: str, toolbox: Toolbox, hints: list[str] | None = None) -> AgentResult:
         result = AgentResult(answer=None, stop_reason="max_steps")
-        history: list[dict] = [{"role": "user", "text": f"Task: {goal}", "observation": toolbox.observe()}]
+        lessons = ("\n\nLessons from previous runs (apply them when relevant):\n" +
+                   "\n".join(f"- {h}" for h in hints)) if hints else ""
+        history: list[dict] = [{"role": "user", "text": f"Task: {goal}{lessons}", "observation": toolbox.observe()}]
         nudges = 0
 
         while result.steps < self.max_steps:
@@ -74,6 +76,8 @@ class ReactAgent:
                 record(result, toolbox, step, None)
                 break
             outcome = toolbox.run(call.name, call.args)
+            if hasattr(self.llm, "feedback"):
+                self.llm.feedback(outcome.ok)
             record(result, toolbox, step, outcome)
             results = [{"id": call.id, "content": outcome.message}]
             results += [{"id": c.id, "content": "Not executed: only one action per turn."} for c in extra]

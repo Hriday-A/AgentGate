@@ -24,6 +24,8 @@ class CreateEnvRequest(BaseModel):
     seed: int = 0
     difficulty: Difficulty = "medium"
     friction: dict[str, Any] = Field(default_factory=dict, description="Per-field overrides of the preset")
+    env_id: str | None = Field(default=None, pattern=r"^[a-z0-9-]{1,40}$",
+                               description="Optional fixed id, so repeated runs see identical URLs")
 
 
 class CreateEnvResponse(BaseModel):
@@ -46,7 +48,7 @@ def create_env(request: Request, body: CreateEnvRequest | None = None) -> Create
         friction = resolve(body.difficulty, body.friction)
     except ValidationError as e:
         raise HTTPException(422, f"Invalid friction settings: {e}") from e
-    env = STORE.create(body.seed, friction)
+    env = STORE.create(body.seed, friction, body.env_id)
     return CreateEnvResponse(env_id=env.id, home=str(request.url_for("home", env_id=env.id)), friction=friction)
 
 

@@ -13,3 +13,7 @@ practice/
 api/target/
 api/storage/
 storage/
+
+# Local model cache and learned lessons
+.cache/
+memory/

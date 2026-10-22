@@ -82,3 +82,12 @@ def test_tool_calls_are_parsed():
     resp = _llm_with(handler).complete("s", [{"role": "user", "text": "hi"}],
                                        [{"name": "click", "description": "d", "input_schema": {}}])
     assert resp.tool_calls[0].name == "click" and resp.tool_calls[0].args == {"element": 3}
+
+
+def test_non_object_tool_arguments_become_empty():
+    def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {"content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "click", "arguments": '"element 3"'}}]}}]})
+
+    resp = _llm_with(handler).complete("s", [{"role": "user", "text": "hi"}], [])
+    assert resp.tool_calls[0].args == {}

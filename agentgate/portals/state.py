@@ -21,9 +21,12 @@ class EnvStore:
         self._envs: dict[str, Env] = {}
         self._lock = threading.Lock()
 
-    def create(self, seed: int, friction: Friction) -> Env:
-        env = generate_env(uuid.uuid4().hex[:10], seed, friction)
+    def create(self, seed: int, friction: Friction, env_id: str | None = None) -> Env:
+        """Create an environment. A caller-chosen id keeps URLs identical across runs (cache-friendly)."""
+        env = generate_env(env_id or uuid.uuid4().hex[:10], seed, friction)
         with self._lock:
+            if env.id in self._envs:
+                raise HTTPException(409, f"Environment {env.id} already exists")
             self._envs[env.id] = env
         return env
 

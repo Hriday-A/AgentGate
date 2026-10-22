@@ -41,6 +41,9 @@ def summarize(records: list[dict]) -> dict:
         "p95_seconds": percentile(95, seconds),
         "input_tokens": sum(r["input_tokens"] for r in records),
         "output_tokens": sum(r["output_tokens"] for r in records),
+        "llm_calls": sum(r.get("llm_calls", 0) for r in records),
+        "cached_calls": sum(r.get("cached_calls", 0) for r in records),
+        "small_model_calls": sum(r.get("small_calls", 0) for r in records),
         "total_cost_usd": None if any(c is None for c in costs) else round(sum(costs), 4),
         "cost_per_task_usd": None if any(c is None for c in costs) or not n else round(sum(costs) / n, 5),
         "failures": failures,
@@ -64,6 +67,8 @@ def print_run(results: dict) -> None:
           f"field accuracy {_pct(s['field_accuracy'])}")
     print(f"Steps avg {s['avg_steps']} · latency p50 {s['p50_seconds']}s p95 {s['p95_seconds']}s · "
           f"tokens {s['input_tokens']}/{s['output_tokens']} · cost {cost}")
+    if s.get("llm_calls"):
+        print(f"Model calls {s['llm_calls']} · cached {s['cached_calls']} · small model {s['small_model_calls']}")
     if s["failures"]:
         print("Failures: " + ", ".join(f"{k}={v}" for k, v in sorted(s["failures"].items())))
 

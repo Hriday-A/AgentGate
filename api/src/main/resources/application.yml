@@ -29,6 +29,11 @@ management:
     web:
       exposure:
         include: health
+  # Traces are exported only when an OTLP endpoint is configured, e.g. in docker-compose:
+  # MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT=http://jaeger:4318/v1/traces
+  tracing:
+    sampling:
+      probability: 1.0
 
 agentgate:
   # The dashboard's public URL: OAuth and logout send the browser back here.

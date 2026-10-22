@@ -13,6 +13,7 @@ from typing import Callable
 from playwright.sync_api import Page
 
 from ..extraction.extract import ExtractionResult
+from ..telemetry import tracer
 from .browser import ActionError, Browser
 
 
@@ -50,6 +51,7 @@ class Outcome:
     ok: bool
     message: str
     data: dict | None = None
+    target: str | None = None  # label of the element acted on, e.g. "Sign in"
 
 
 @dataclass
@@ -68,13 +70,40 @@ class Toolbox:
     def observe(self) -> str:
         return self.browser.observe()
 
-    def run(self, name: str, args: dict) -> Outcome:
+    def _label(self, element) -> str | None:
+        """Human-readable label for an element number in the latest snapshot."""
+        snap = self.browser.last
+        if snap is None:
+            return None
         try:
-            return self._run(name, args)
-        except ActionError as e:
-            return Outcome(False, str(e))
-        except Exception as e:  # never let one bad tool call crash the episode
-            return Outcome(False, f"{type(e).__name__}: {e}")
+            return next((e["label"] for e in snap.elements if e["id"] == int(element)), None)
+        except (TypeError, ValueError):
+            return None
+
+    def run(self, name: str, args: dict) -> Outcome:
+        """Run one tool call. Never raises: any problem becomes a failed Outcome the agent can react to."""
+        with tracer.start_as_current_span(f"tool.{name}") as span:
+            target = None
+            try:
+                if not isinstance(args, dict):
+                    raise ActionError("Tool arguments must be a JSON object.")
+                target = self._target(name, args)
+                outcome = self._run(name, args)
+            except ActionError as e:
+                outcome = Outcome(False, str(e))
+            except Exception as e:  # never let one bad tool call crash the episode
+                outcome = Outcome(False, f"{type(e).__name__}: {e}")
+            span.set_attributes({"agentgate.tool.ok": outcome.ok, "agentgate.tool.target": target or ""})
+        outcome.target = target or None
+        return outcome
+
+    def _target(self, name: str, args: dict) -> str | None:
+        if name == "fill":
+            fields = args.get("fields") or []
+            if not isinstance(fields, list) or not all(isinstance(f, dict) for f in fields):
+                raise ActionError('fill needs "fields": a list of {"element": <number>, "value": <text>} objects.')
+            return ", ".join(filter(None, (self._label(f.get("element")) for f in fields)))
+        return self._label(args.get("element")) if "element" in args else None
 
     def _run(self, name: str, args: dict) -> Outcome:
         b = self.browser

@@ -120,6 +120,31 @@ before and after repair, and validator precision and recall.
   builds on every push. On pull requests, the smoke subset runs against a real model and **fails the build if
   success drops** versus [`baselines/smoke.json`](baselines). Needs a `GEMINI_API_KEY` repository secret.
 
+## Scaling: routing, caching, learning, tracing
+
+Every model call passes through a small middleware stack ([`middleware.py`](agentgate/middleware.py)):
+
+```
+agent ─► Metered (ledger + OTel span) ─► Routed ─┬─► Cached ─► small local model   (easy steps)
+                                                  └─► Cached ─► large API model     (everything else)
+```
+
+- **Routing** (`--small-model ollama:qwen2.5:1.5b`): sign-in, pop-up, navigation and download steps go to a
+  small local model. Planning, forms, extraction and any step after a failure go to the large model. A small
+  model that returns no action escalates to the large one. `--router bandit` replaces the rules with an
+  epsilon-greedy contextual bandit that learns per step type which model passes verification, with a latency
+  penalty.
+- **Caching** (`--cache`): exact-match SQLite cache of model responses. Environments use deterministic ids, so
+  an unchanged task replays identical prompts and costs nothing on a CI re-run.
+- **Feedback loop** (`python -m agentgate learn --rounds 3`): failed tasks get a reflection, where the model
+  reads its own trace and writes up to 3 general lessons. Passed tasks become demonstrations. Lessons are
+  retrieved for new tasks by vendor, task kind and word overlap. Each round runs on **fresh seeds** (new
+  invoices and layouts), the reflection never sees the expected answer, and lessons containing specific
+  numbers are discarded, so gains have to come from generalizable lessons.
+- **Tracing**: OpenTelemetry spans for run → task → agent node → tool → model call (GenAI attributes: model,
+  tokens), exported over OTLP. `publish` sends a W3C `traceparent` header, so the Spring API's spans join
+  the runner's trace. Docker Compose includes Jaeger at http://localhost:16686.
+
 ## Platform
 
 - **API:** GraphQL schema in [`schema.graphqls`](api/src/main/resources/graphql/schema.graphqls). Agents get
@@ -142,8 +167,11 @@ Numbers are produced by the commands above and added here as runs complete.
 | Measurement | Result |
 |---|---|
 | Extraction, llama3.2 3B local, 6 clean PDFs | 100% on IDs, dates and PO numbers; 16.7% whole-document accuracy; validator flagged 6/6 wrong documents |
+| Response cache, same task twice (local llama3.2) | 58.0 s → 1.6 s; 7/7 model calls served from cache; 0 tokens on the re-run |
 | Agent suite, Gemini | _pending_ |
 | Extraction, Gemini, clean vs. scanned | _pending_ |
+| Local routing: p95 latency and API calls, before/after | _pending_ |
+| Learning rounds 1 → 2 → 3 | _pending_ |
 
 ## Repository layout
 

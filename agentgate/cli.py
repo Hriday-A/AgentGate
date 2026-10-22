@@ -7,6 +7,15 @@ from pathlib import Path
 DEFAULT_MODEL = os.environ.get("AGENTGATE_MODEL", "gemini:gemini-2.5-flash")
 
 
+def _add_scaling_flags(p: argparse.ArgumentParser, memory_default: str | None = None) -> None:
+    p.add_argument("--small-model", help="route easy steps to this model, e.g. ollama:qwen2.5:1.5b")
+    p.add_argument("--router", choices=["rules", "bandit"], default="rules")
+    p.add_argument("--cache", action="store_true", help="serve repeated identical model calls from a local cache")
+    p.add_argument("--cache-path", default=".cache/llm.sqlite")
+    p.add_argument("--memory", default=memory_default, help="lessons file to retrieve hints from")
+    p.add_argument("--seed-offset", type=int, default=0, help="shift every task's seed (fresh data)")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agentgate", description="Invoice agent + evaluation harness")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -26,6 +35,26 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--no-autostart", action="store_true", help="fail instead of starting the portals")
     run.add_argument("--headed", action="store_true", help="show the browser")
     run.add_argument("--out", default="runs")
+    _add_scaling_flags(run)
+
+    lrn = sub.add_parser("learn", help="Feedback loop: run, reflect on failures, retry on fresh data")
+    lrn.add_argument("--rounds", type=int, default=3)
+    lrn.add_argument("--model", default=DEFAULT_MODEL)
+    lrn.add_argument("--reflect-model", help="model that writes lessons (default: --model)")
+    lrn.add_argument("--agent", choices=["graph", "react"], default="graph")
+    lrn.add_argument("--extract-model")
+    lrn.add_argument("--label")
+    lrn.add_argument("--smoke", action="store_true")
+    lrn.add_argument("--difficulty", choices=["easy", "medium", "hard"])
+    lrn.add_argument("--tasks")
+    lrn.add_argument("--limit", type=int)
+    lrn.add_argument("--max-steps", type=int, default=30)
+    lrn.add_argument("--concurrency", type=int, default=1)
+    lrn.add_argument("--portal-url", default="http://127.0.0.1:5055")
+    lrn.add_argument("--no-autostart", action="store_true")
+    lrn.add_argument("--headed", action="store_true")
+    lrn.add_argument("--out", default="runs")
+    _add_scaling_flags(lrn, memory_default="memory/lessons.jsonl")
 
     cmp_ = sub.add_parser("compare", help="Regression gate between two results.json files")
     cmp_.add_argument("baseline")
@@ -58,11 +87,18 @@ def main(argv: list[str] | None = None) -> int:
     xev.add_argument("--no-repair", action="store_true", help="disable validation-guided retries")
     xev.add_argument("--concurrency", type=int, default=2)
     xev.add_argument("--out", default="runs", type=Path)
+    xev.add_argument("--cache", action="store_true")
+    xev.add_argument("--cache-path", default=".cache/llm.sqlite")
 
     args = parser.parse_args(argv)
     if args.cmd == "run":
         from .runner.run import run_suite
-        return run_suite(args)
+        run_suite(args)
+        return 0
+    if args.cmd == "learn":
+        from .learning.rounds import learn
+        learn(args)
+        return 0
     if args.cmd == "compare":
         from .runner.report import compare
         return compare(args.baseline, args.current, args.max_drop)
@@ -89,8 +125,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "extract-eval":
         from .extraction import evaluate
         from .extraction.extract import extract_invoice
-        from .llm import make_llm
-        llm = make_llm(args.model)
+        from .middleware import build_llm
+        llm = build_llm(args.model, cache=args.cache_path if args.cache else None)
         config = {"model": args.model, "mode": args.mode, "repair": not args.no_repair,
                   "n": args.n, "scanned_share": args.scanned}
         results = evaluate.run(

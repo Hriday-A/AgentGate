@@ -168,3 +168,12 @@ def test_routing_ap_vs_vendor(client):
     assert client.get(f"/e/{env_id}/ap/").status_code == 200
     assert client.get(f"/e/{env_id}/nope/login").status_code == 404
     assert client.get("/e/doesnotexist/acme/login").status_code == 404
+
+
+def test_fixed_env_ids_are_validated_and_unique(client):
+    ok = client.post("/admin/envs", json={"seed": 1, "env_id": "t1-easy"})
+    assert ok.status_code == 200 and ok.json()["env_id"] == "t1-easy"
+    assert client.post("/admin/envs", json={"seed": 1, "env_id": "t1-easy"}).status_code == 409
+    assert client.post("/admin/envs", json={"seed": 1, "env_id": "../x"}).status_code == 422
+    client.delete("/admin/envs/t1-easy")
+    assert client.post("/admin/envs", json={"seed": 1, "env_id": "t1-easy"}).status_code == 200

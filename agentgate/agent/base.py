@@ -27,6 +27,8 @@ def record(result: AgentResult, toolbox: Toolbox, step: dict, outcome: Outcome |
     step["step"] = result.steps
     if outcome is not None:
         step["ok"] = outcome.ok
+        if outcome.target:
+            step["target"] = outcome.target
         step["outcome"] = outcome.message[:2000]
         if not outcome.ok:
             result.failed_actions += 1

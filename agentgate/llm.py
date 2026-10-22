@@ -57,6 +57,8 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
+    model: str = ""        # "provider:model" that actually answered (matters once calls are routed)
+    cached: bool = False
 
 
 @dataclass
@@ -65,6 +67,8 @@ class JSONResponse:
     text: str                # raw reply, kept for debugging
     input_tokens: int = 0
     output_tokens: int = 0
+    model: str = ""
+    cached: bool = False
 
 
 class RateLimiter:
@@ -123,6 +127,7 @@ class OpenAICompatLLM:
 
     def __init__(self, provider: str, model: str, timeout: float | None = None, max_retries: int = 5):
         base_url, key_env, rpm = OPENAI_COMPAT[provider]
+        self.spec = f"{provider}:{model}"
         # Local models on a laptop can take minutes per call; hosted ones shouldn't.
         timeout = timeout or float(os.environ.get("AGENTGATE_LLM_TIMEOUT", 600 if provider == "ollama" else 120))
         self.provider, self.model = provider, model
@@ -178,6 +183,7 @@ class OpenAICompatLLM:
     def complete(self, system: str, history: list[dict], tools: list[dict]) -> LLMResponse:
         payload = self._post({
             "model": self.model,
+            "temperature": 0,  # reproducible runs, and identical requests can be served from cache
             "messages": self._messages(system, history),
             "tools": [{"type": "function", "function": {
                 "name": t["name"], "description": t["description"], "parameters": t["input_schema"]}} for t in tools],
@@ -189,8 +195,10 @@ class OpenAICompatLLM:
                 args = json.loads(c["function"].get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {}
+            if not isinstance(args, dict):  # some models send a bare string or list; tools need an object
+                args = {}
             calls.append(ToolCall(c.get("id") or f"call_{i}", c["function"]["name"], args))
-        return LLMResponse(message.get("content") or "", calls, *self._usage(payload))
+        return LLMResponse(message.get("content") or "", calls, *self._usage(payload), model=self.spec)
 
     def extract(self, system: str, prompt: str, images: list[bytes], schema: dict, name: str) -> JSONResponse:
         content: list[dict] = [{"type": "text", "text": prompt}]
@@ -215,7 +223,7 @@ class OpenAICompatLLM:
             self.json_schema_supported = False
             payload = self._post(body(False))
         text = payload["choices"][0]["message"].get("content") or ""
-        return JSONResponse(parse_json_object(text), text, *self._usage(payload))
+        return JSONResponse(parse_json_object(text), text, *self._usage(payload), model=self.spec)
 
 
 def make_llm(spec: str):

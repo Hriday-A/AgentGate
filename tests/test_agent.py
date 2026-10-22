@@ -214,3 +214,14 @@ def _invoice(state, inv_json) -> data.Invoice:
     """Rebuild the data.Invoice for a state entry (same seed → same objects)."""
     env = data.generate_env("x", state["seed"], None)
     return env.find_invoice(inv_json["vendor"], inv_json["number"])
+
+
+def test_malformed_tool_arguments_fail_softly(server, page):
+    env, _ = new_env(server)
+    page.goto(env["home"])
+    tb = Toolbox(page)
+    tb.observe()
+    for name, args in [("fill", {"fields": ["Email", "Password"]}), ("fill", {"fields": "x"}),
+                       ("click", "element 3"), ("click", {"element": "abc"})]:
+        outcome = tb.run(name, args)
+        assert not outcome.ok and outcome.message, (name, args)

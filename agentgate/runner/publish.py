@@ -11,6 +11,10 @@ import subprocess
 from pathlib import Path
 
 import httpx
+from opentelemetry.propagate import inject
+
+from ..telemetry import setup as setup_telemetry
+from ..telemetry import tracer
 
 INGEST = "mutation($input: RunInput!) { ingestRun(input: $input) { id } }"
 
@@ -75,8 +79,17 @@ def build_input(run_dir: Path) -> dict:
 
 def publish(run_dir: Path, api_url: str, api_key: str, client: httpx.Client | None = None) -> str:
     """Returns the run's id in the API."""
+    setup_telemetry()
     client = client or httpx.Client(timeout=60)
-    headers = {"X-Api-Key": api_key}
+    with tracer.start_as_current_span("publish") as span:
+        headers = {"X-Api-Key": api_key}
+        inject(headers)  # W3C traceparent, so the API's spans join this trace
+        run_id = _publish(run_dir, api_url, headers, client)
+        span.set_attribute("agentgate.api_run_id", run_id)
+        return run_id
+
+
+def _publish(run_dir: Path, api_url: str, headers: dict, client: httpx.Client) -> str:
     payload = build_input(run_dir)
     resp = client.post(f"{api_url.rstrip('/')}/graphql", headers=headers,
                        json={"query": INGEST, "variables": {"input": payload}})

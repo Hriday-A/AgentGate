@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -14,12 +15,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
+from opentelemetry import context as otel_context
+
 from ..agent.graph import GraphAgent
 from ..agent.react import ReactAgent
 from ..agent.toolbox import Toolbox
 from ..extraction.extract import extract_invoice
-from ..llm import cost_usd, make_llm
+from ..learning.memory import Memory
+from ..middleware import Ledger, build_llm
 from ..suites import invoice
+from ..telemetry import setup as setup_telemetry
+from ..telemetry import tracer
 from .report import print_run, summarize
 
 AGENTS = {"graph": GraphAgent, "react": ReactAgent}
@@ -83,42 +89,64 @@ def select_tasks(opts) -> list[invoice.Task]:
     return tasks
 
 
+def _create_env(base: str, seed: int, difficulty: str) -> dict:
+    """Same task → same environment id → same URLs in every prompt, so repeated runs can hit the cache.
+    If that id is taken (the same task running concurrently), fall back to a random one."""
+    try:
+        return _http("POST", f"{base}/admin/envs", {"seed": seed, "difficulty": difficulty,
+                                                   "env_id": f"t{seed}-{difficulty}"})
+    except urllib.error.HTTPError as e:
+        if e.code != 409:
+            raise
+        return _http("POST", f"{base}/admin/envs", {"seed": seed, "difficulty": difficulty})
+
+
 def run_task(task: invoice.Task, opts, run_dir: Path) -> dict:
     from playwright.sync_api import sync_playwright
 
     base = opts.portal_url
-    env = _http("POST", f"{base}/admin/envs", {"seed": task.seed, "difficulty": task.difficulty})
+    seed = task.seed + getattr(opts, "seed_offset", 0)  # an offset gives the same task kinds on fresh data
+    env = _create_env(base, seed, task.difficulty)
     state_url = f"{base}/admin/envs/{env['env_id']}/state"
     prepared = invoice.prepare(task, _http("GET", state_url))
-    llm = make_llm(opts.model)
-    extract_llm = make_llm(opts.extract_model) if opts.extract_model else llm
+    ledger = Ledger()  # one ledger per task: agent and extraction calls, every model
+    cache = opts.cache_path if getattr(opts, "cache", False) else None
+    llm = build_llm(opts.model, getattr(opts, "small_model", None), getattr(opts, "router", "rules"), cache, ledger)
+    extract_llm = build_llm(opts.extract_model or opts.model, cache=cache, ledger=ledger)
     agent = AGENTS[opts.agent](llm, max_steps=opts.max_steps)
+    hints: list[str] = []
+    if getattr(opts, "memory", None):
+        lessons = Memory(opts.memory).retrieve(task.kind, task.vendor, task.difficulty, prepared.prompt)
+        hints = [l.text for l in lessons]
     task_dir = run_dir / task.id
 
     t0 = time.perf_counter()
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=not opts.headed)
-            page = browser.new_context(viewport={"width": 1280, "height": 900}, accept_downloads=True).new_page()
-            page.goto(env["home"])
-            toolbox = Toolbox(page, lambda pdf: extract_invoice(pdf, extract_llm), task_dir)
-            result = agent.run(prepared.prompt, toolbox)
-            browser.close()
-        final_state = _http("GET", state_url)
-    finally:
-        _http("DELETE", f"{base}/admin/envs/{env['env_id']}")
-    elapsed = time.perf_counter() - t0
+    with tracer.start_as_current_span("eval.task") as span:
+        span.set_attributes({"agentgate.task": task.id, "agentgate.difficulty": task.difficulty,
+                             "agentgate.kind": task.kind, "agentgate.seed": seed})
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=not opts.headed)
+                page = browser.new_context(viewport={"width": 1280, "height": 900}, accept_downloads=True).new_page()
+                page.goto(env["home"])
+                toolbox = Toolbox(page, lambda pdf: extract_invoice(pdf, extract_llm), task_dir)
+                result = agent.run(prepared.prompt, toolbox, hints)
+                browser.close()
+            final_state = _http("GET", state_url)
+        finally:
+            _http("DELETE", f"{base}/admin/envs/{env['env_id']}")
+        elapsed = time.perf_counter() - t0
+        passed, detail = prepared.check(final_state, result.answer)
+        span.set_attributes({"agentgate.passed": passed, "agentgate.steps": result.steps})
 
-    passed, detail = prepared.check(final_state, result.answer)
     field_scores = prepared.fields(final_state) if prepared.fields else None
-    ex_in, ex_out = toolbox.extraction_tokens
-    tokens_in, tokens_out = result.input_tokens + ex_in, result.output_tokens + ex_out
+    usage = ledger.summary()
     record = {
         "task_id": task.id,
         "kind": task.kind,
         "vendor": task.vendor,
         "difficulty": task.difficulty,
-        "seed": task.seed,
+        "seed": seed,
         "passed": passed,
         "failure": None if passed else (result.stop_reason if result.stop_reason != "done" else "wrong_result"),
         "detail": result.error or detail,
@@ -128,16 +156,20 @@ def run_task(task: invoice.Task, opts, run_dir: Path) -> dict:
         "steps": result.steps,
         "failed_actions": result.failed_actions,
         "replans": result.replans,
+        "hints": len(hints),
         "seconds": round(elapsed, 2),
-        "llm_seconds": round(result.llm_seconds, 2),
-        "input_tokens": tokens_in,
-        "output_tokens": tokens_out,
-        "cost_usd": cost_usd(llm.provider, llm.model, tokens_in, tokens_out),
+        "llm_seconds": usage["llm_seconds"],
+        "llm_calls": usage["llm_calls"],
+        "cached_calls": usage["cached_calls"],
+        "small_calls": usage["small_calls"],
+        "input_tokens": usage["input_tokens"],
+        "output_tokens": usage["output_tokens"],
+        "cost_usd": usage["cost_usd"],
     }
     task_dir.mkdir(parents=True, exist_ok=True)
     (task_dir / "trace.json").write_text(json.dumps(
-        {"task": record, "prompt": prepared.prompt, "plan": result.plan, "trace": result.trace},
-        indent=2, default=str))
+        {"task": record, "prompt": prepared.prompt, "hints": hints, "plan": result.plan,
+         "models": usage["by_model"], "trace": result.trace}, indent=2, default=str))
     return record
 
 
@@ -145,11 +177,14 @@ def _harness_error(task: invoice.Task, e: Exception) -> dict:
     return {"task_id": task.id, "kind": task.kind, "vendor": task.vendor, "difficulty": task.difficulty,
             "seed": task.seed, "passed": False, "failure": "harness_error", "detail": f"{type(e).__name__}: {e}",
             "answer": None, "field_accuracy": 0.0 if task.kind.startswith("enter_") else None, "fields": None,
-            "steps": 0, "failed_actions": 0, "replans": 0, "seconds": 0.0, "llm_seconds": 0.0,
-            "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+            "steps": 0, "failed_actions": 0, "replans": 0, "hints": 0, "seconds": 0.0, "llm_seconds": 0.0,
+            "llm_calls": 0, "cached_calls": 0, "small_calls": 0, "input_tokens": 0, "output_tokens": 0,
+            "cost_usd": 0.0}
 
 
-def run_suite(opts) -> int:
+def run_suite(opts) -> dict:
+    """Run the selected tasks and write runs/<run-id>/results.json. Returns the results."""
+    setup_telemetry()
     tasks = select_tasks(opts)
     if not tasks:
         raise SystemExit("No tasks matched.")
@@ -159,12 +194,19 @@ def run_suite(opts) -> int:
     label = opts.label or f"{opts.agent}/{opts.model}"
     print(f"Run {run_id} [{label}]: {len(tasks)} task(s) → {run_dir}")
 
-    with portal_server(opts.portal_url, autostart=not opts.no_autostart):
+    with portal_server(opts.portal_url, autostart=not opts.no_autostart), \
+            tracer.start_as_current_span("eval.run") as run_span:
+        run_span.set_attributes({"agentgate.run_id": run_id, "agentgate.label": label})
+        parent = otel_context.get_current()  # worker threads don't inherit it; attach it explicitly
+
         def one(task: invoice.Task) -> dict:
+            token = otel_context.attach(parent)
             try:
                 rec = run_task(task, opts, run_dir)
             except Exception as e:  # keep the suite going; record harness errors as failures
                 rec = _harness_error(task, e)
+            finally:
+                otel_context.detach(token)
             print(f"  {'✓' if rec['passed'] else '✗'} {rec['task_id']}", flush=True)
             return rec
 
@@ -176,12 +218,17 @@ def run_suite(opts) -> int:
         "run_id": run_id,
         "suite": "invoice",
         "config": {"label": label, "agent": opts.agent, "model": opts.model,
-                   "extract_model": opts.extract_model or opts.model, "max_steps": opts.max_steps},
+                   "extract_model": opts.extract_model or opts.model, "max_steps": opts.max_steps,
+                   "small_model": getattr(opts, "small_model", None),
+                   "router": getattr(opts, "router", None) if getattr(opts, "small_model", None) else None,
+                   "cache": bool(getattr(opts, "cache", False)), "memory": getattr(opts, "memory", None),
+                   "seed_offset": getattr(opts, "seed_offset", 0)},
         "summary": summarize(records),
         "tasks": records,
     }
     out_file = run_dir / "results.json"
     out_file.write_text(json.dumps(results, indent=2))
+    results["path"] = str(out_file)
     print_run(results)
     print(f"\nResults: {out_file}")
-    return 0
+    return results
