@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentgate"
+version = "0.1.0"
+description = "CI testing for browser agents"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "jinja2>=3.1",
+  "itsdangerous>=2.2",        # signed session cookies
+  "python-multipart>=0.0.9",  # HTML form parsing
+  "reportlab>=4.2",           # invoice PDFs
+  "pypdfium2>=4.30",          # rasterizing PDFs for the scanned variant
+  "pillow>=10.4",
+  "playwright>=1.45",
+  "pyyaml>=6",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+agentgate = "agentgate.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["agentgate*"]
+
+[tool.setuptools.package-data]
+agentgate = ["portals/templates/*.html", "suites/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Payables – Northwind Analytics{% endblock %}
+{% block brand %}Northwind Analytics · Payables{% endblock %}
+{% block nav %}<a href="{{ url_for('home', env_id=env.id) }}">Workstation</a>{% endblock %}
+{% block content %}
+<h2>Recorded invoices</h2>
+{% if saved %}<p class="ok">Invoice {{ saved }} recorded.</p>{% endif %}
+<p><a class="btn" href="{{ url_for('ap_new', env_id=env.id) }}">Record new invoice</a></p>
+{% if env.ap_entries %}
+<table>
+  <thead><tr><th>Vendor</th><th>Invoice number</th><th>Invoice date</th><th>Due date</th><th>PO</th><th>Total (USD)</th></tr></thead>
+  <tbody>
+  {% for e in env.ap_entries %}
+    <tr><td>{{ vendors[e.vendor].name }}</td><td>{{ e.invoice_number }}</td><td>{{ e.invoice_date }}</td><td>{{ e.due_date }}</td><td>{{ e.po_number }}</td><td>{{ money(e.amount_cents) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">No invoices recorded yet.</p>{% endif %}
+{% endblock %}

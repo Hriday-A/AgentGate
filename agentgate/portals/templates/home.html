@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Back-office workstation{% endblock %}
+{% block brand %}Back-office workstation{% endblock %}
+{% block content %}
+<h2>Vendor portals</h2>
+<ul>
+{% for key, v in vendors.items() %}
+  <li><a href="{{ url_for('login', env_id=env.id, vendor=key) }}">{{ v.name }}</a></li>
+{% endfor %}
+</ul>
+<h2>Internal tools</h2>
+<ul><li><a href="{{ url_for('ap_list', env_id=env.id) }}">Accounts Payable</a></li></ul>
+{% endblock %}

@@ -1,0 +1,33 @@
+suite: invoice
+description: Invoice processing across three messy vendor portals and an internal AP app.
+tasks:
+  - {id: acme-amount-1, kind: lookup_amount, vendor: acme, seed: 101}
+  - {id: acme-amount-2, kind: lookup_amount, vendor: acme, seed: 102}
+  - {id: acme-due-date, kind: lookup_due_date, vendor: acme, seed: 103}
+  - {id: acme-count-unpaid, kind: count_unpaid, vendor: acme, seed: 104}
+  - {id: acme-outstanding-1, kind: total_outstanding, vendor: acme, seed: 105}
+  - {id: acme-outstanding-2, kind: total_outstanding, vendor: acme, seed: 106}
+  - {id: acme-enter-1, kind: enter_invoice, vendor: acme, seed: 107}
+  - {id: acme-enter-2, kind: enter_invoice, vendor: acme, seed: 108}
+  - {id: acme-enter-oldest-1, kind: enter_oldest_unpaid, vendor: acme, seed: 109}
+  - {id: acme-enter-oldest-2, kind: enter_oldest_unpaid, vendor: acme, seed: 110}
+  - {id: globex-amount-1, kind: lookup_amount, vendor: globex, seed: 201}
+  - {id: globex-amount-2, kind: lookup_amount, vendor: globex, seed: 202}
+  - {id: globex-due-date, kind: lookup_due_date, vendor: globex, seed: 203}
+  - {id: globex-count-unpaid, kind: count_unpaid, vendor: globex, seed: 204}
+  - {id: globex-outstanding-1, kind: total_outstanding, vendor: globex, seed: 205}
+  - {id: globex-outstanding-2, kind: total_outstanding, vendor: globex, seed: 206}
+  - {id: globex-enter-1, kind: enter_invoice, vendor: globex, seed: 207}
+  - {id: globex-enter-2, kind: enter_invoice, vendor: globex, seed: 208}
+  - {id: globex-enter-oldest-1, kind: enter_oldest_unpaid, vendor: globex, seed: 209}
+  - {id: globex-enter-oldest-2, kind: enter_oldest_unpaid, vendor: globex, seed: 210}
+  - {id: initech-amount-1, kind: lookup_amount, vendor: initech, seed: 301}
+  - {id: initech-amount-2, kind: lookup_amount, vendor: initech, seed: 302}
+  - {id: initech-due-date, kind: lookup_due_date, vendor: initech, seed: 303}
+  - {id: initech-count-unpaid, kind: count_unpaid, vendor: initech, seed: 304}
+  - {id: initech-outstanding-1, kind: total_outstanding, vendor: initech, seed: 305}
+  - {id: initech-outstanding-2, kind: total_outstanding, vendor: initech, seed: 306}
+  - {id: initech-enter-1, kind: enter_invoice, vendor: initech, seed: 307}
+  - {id: initech-enter-2, kind: enter_invoice, vendor: initech, seed: 308}
+  - {id: initech-enter-oldest-1, kind: enter_oldest_unpaid, vendor: initech, seed: 309}
+  - {id: initech-enter-oldest-2, kind: enter_oldest_unpaid, vendor: initech, seed: 310}

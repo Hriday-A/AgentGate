@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ v.name }} – {{ inv.number }}{% endblock %}
+{% block brand %}{{ v.name }} Customer Portal{% endblock %}
+{% block nav %}<a href="{{ url_for('invoices', env_id=env.id, vendor=vendor) }}">Invoices</a><a href="{{ url_for('logout', env_id=env.id, vendor=vendor) }}">{{ buttons.sign_out }}</a>{% endblock %}
+{% block content %}
+<h2>{{ layout.labels.number }} {{ inv.number }}</h2>
+<table style="width:auto">
+  <tr><th>{{ layout.labels.issue_date }}</th><td>{{ issue }}</td></tr>
+  <tr><th>{{ layout.labels.due_date }}</th><td>{{ due }}</td></tr>
+  <tr><th>{{ layout.labels.amount }}</th><td>{{ total }}</td></tr>
+  <tr><th>{{ layout.labels.status }}</th><td>{{ status }}</td></tr>
+</table>
+<p class="muted">Line items, tax and order references are on the invoice document.</p>
+<p><a class="btn" href="{{ url_for('invoice_pdf', env_id=env.id, vendor=vendor, number=inv.number) }}">{{ buttons.download }}</a></p>
+<p><a href="{{ url_for('invoices', env_id=env.id, vendor=vendor) }}">‹ Back to list</a></p>
+{% endblock %}

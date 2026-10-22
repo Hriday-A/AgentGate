@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Record invoice – Payables{% endblock %}
+{% block brand %}Northwind Analytics · Payables{% endblock %}
+{% block nav %}<a href="{{ url_for('ap_list', env_id=env.id) }}">All invoices</a>{% endblock %}
+{% block content %}
+<h2>Record a vendor invoice</h2>
+{% for e in errors %}<p class="error">{{ e }}</p>{% endfor %}
+<form method="post">
+  <label for="vendor">Vendor</label>
+  <select id="vendor" name="vendor">
+    <option value="">— select —</option>
+    {% for key, v in vendors.items() %}<option value="{{ key }}" {% if form.get('vendor') == key %}selected{% endif %}>{{ v.name }} ({{ v.vendor_id }})</option>{% endfor %}
+  </select>
+  {% for name, label, hint in [
+      ('invoice_number', 'Invoice number', ''),
+      ('invoice_date', 'Invoice date', 'YYYY-MM-DD'),
+      ('due_date', 'Due date', 'YYYY-MM-DD'),
+      ('po_number', 'PO number', 'PO-000000'),
+      ('subtotal', 'Subtotal (USD)', '1234.56'),
+      ('tax', 'Tax (USD)', '0.00'),
+      ('shipping', 'Shipping (USD)', '0.00'),
+      ('total', 'Total (USD)', '1234.56')] %}
+  <label for="{{ name }}">{{ label }}{% if hint %} <span class="muted">e.g. {{ hint }}</span>{% endif %}</label>
+  <input id="{{ name }}" name="{{ name }}" placeholder="{{ hint }}" value="{{ form.get(name, '') }}">
+  {% endfor %}
+  <div><button type="submit">Save invoice</button></div>
+</form>
+{% endblock %}

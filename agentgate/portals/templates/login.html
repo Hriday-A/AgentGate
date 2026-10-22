@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{{ v.name }} – Sign in{% endblock %}
+{% block brand %}{{ v.name }} Customer Portal{% endblock %}
+{% block content %}
+<h2>Sign in</h2>
+{% if expired %}<p class="error">Your session has expired. Please sign in again.</p>{% endif %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post">
+  <input type="hidden" name="next" value="{{ next }}">
+  <label for="username">Email</label><input id="username" name="username" type="text" autocomplete="off">
+  <label for="password">Password</label><input id="password" name="password" type="password">
+  <div><button type="submit">{{ buttons.sign_in }}</button></div>
+</form>
+<p class="muted"><a href="#">Forgot password?</a> · <a href="#">Request access</a></p>
+{% endblock %}

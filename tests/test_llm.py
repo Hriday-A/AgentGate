@@ -1,0 +1,84 @@
+import json
+import time
+
+import httpx
+import pytest
+
+from agentgate.llm import OpenAICompatLLM, RateLimiter, make_llm, parse_json_object
+
+
+@pytest.mark.parametrize("text, expected", [
+    ('{"a": 1}', {"a": 1}),
+    ('```json\n{"a": 1}\n```', {"a": 1}),
+    ('Here you go: {"a": {"b": 2}} hope that helps', {"a": {"b": 2}}),
+    ("no json here", None),
+    ("[1, 2]", None),
+])
+def test_parse_json_object(text, expected):
+    assert parse_json_object(text) == expected
+
+
+def test_rate_limiter_spaces_calls():
+    limiter = RateLimiter(rpm=600)  # one call per 0.1 s
+    start = time.monotonic()
+    for _ in range(4):
+        limiter.wait()
+    assert time.monotonic() - start >= 0.29
+
+
+def test_make_llm_validates_spec(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(ValueError):
+        make_llm("gemini")
+    with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):
+        make_llm("gemini:gemini-2.5-flash")
+
+
+def _llm_with(handler) -> OpenAICompatLLM:
+    llm = OpenAICompatLLM("ollama", "test-model", max_retries=2)
+    llm.client = httpx.Client(base_url="http://fake", transport=httpx.MockTransport(handler))
+    return llm
+
+
+def _reply(content: str) -> httpx.Response:
+    return httpx.Response(200, json={"choices": [{"message": {"content": content}}],
+                                     "usage": {"prompt_tokens": 7, "completion_tokens": 3}})
+
+
+def test_extract_falls_back_to_json_mode_when_schema_mode_is_rejected():
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append(body["response_format"]["type"])
+        if body["response_format"]["type"] == "json_schema":
+            return httpx.Response(400, json={"error": "response_format not supported"})
+        return _reply('{"ok": true}')
+
+    llm = _llm_with(handler)
+    resp = llm.extract("sys", "prompt", [b"\xff\xd8\xff fake jpeg"], {"type": "object"}, "x")
+    assert resp.data == {"ok": True} and (resp.input_tokens, resp.output_tokens) == (7, 3)
+    assert seen == ["json_schema", "json_object"]
+    llm.extract("sys", "prompt", [], {"type": "object"}, "x")
+    assert seen[-1] == "json_object"  # remembered, no second 400
+
+
+def test_retries_on_429(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    statuses = iter([429, 503, 200])
+
+    def handler(request):
+        status = next(statuses)
+        return _reply('{"n": 1}') if status == 200 else httpx.Response(status, headers={"retry-after": "1"})
+
+    assert _llm_with(handler).extract("s", "p", [], {}, "x").data == {"n": 1}
+
+
+def test_tool_calls_are_parsed():
+    def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {"content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "click", "arguments": '{"element": 3}'}}]}}]})
+
+    resp = _llm_with(handler).complete("s", [{"role": "user", "text": "hi"}],
+                                       [{"name": "click", "description": "d", "input_schema": {}}])
+    assert resp.tool_calls[0].name == "click" and resp.tool_calls[0].args == {"element": 3}

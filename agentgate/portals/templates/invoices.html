@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ v.name }} – {{ v.heading }}{% endblock %}
+{% block brand %}{{ v.name }} Customer Portal{% endblock %}
+{% block nav %}<a href="{{ url_for('invoices', env_id=env.id, vendor=vendor) }}">Invoices</a><a href="#">Orders</a><a href="#">Support</a><a href="{{ url_for('logout', env_id=env.id, vendor=vendor) }}">{{ buttons.sign_out }}</a>{% endblock %}
+{% block content %}
+<h2>{{ v.heading }}</h2>
+<p class="muted">Showing {{ rows|length }} of {{ total }} documents{% if pages > 1 %} · Page {{ page }} of {{ pages }}{% endif %}</p>
+<table>
+  <thead><tr>{% for c in layout.columns %}<th>{{ layout.labels[c] }}</th>{% endfor %}<th></th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>{% for c in layout.columns %}<td>{{ r[c] }}</td>{% endfor %}<td><a href="{{ r.href }}">{{ buttons.view }}</a></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p>
+  {% if page > 1 %}<a href="?page={{ page - 1 }}">{{ buttons.prev }}</a>{% endif %}
+  {% if page < pages %}<a href="?page={{ page + 1 }}">{{ buttons.next }}</a>{% endif %}
+</p>
+{% endblock %}

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}AgentGate{% endblock %}</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; color: #222; background: #f3f3f3; }
+  header { background: {{ color | default('#34495e') }}; color: #fff; padding: 12px 24px;
+           display: flex; justify-content: space-between; align-items: center; }
+  header a { color: #fff; margin-left: 16px; }
+  main { max-width: 980px; margin: 24px auto; background: #fff; padding: 24px; border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; }
+  .banner { position: fixed; left: 0; right: 0; bottom: 0; min-height: 120px; padding: 24px;
+            background: #1c1c1c; color: #fff; z-index: 50; }
+  .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 60;
+              display: flex; align-items: center; justify-content: center; }
+  .modal { background: #fff; padding: 24px; border-radius: 8px; max-width: 420px; }
+  .error { color: #b00020; } .ok { color: #1b7f3b; } .muted { color: #777; font-size: 0.9em; }
+  label { display: block; margin-top: 14px; }
+  input, select { padding: 6px; min-width: 260px; }
+  button, .btn { margin-top: 12px; padding: 8px 14px; cursor: pointer; }
+  .totals td { border: none; padding: 4px 8px; }
+</style>
+</head>
+<body>
+<header><strong>{% block brand %}AgentGate{% endblock %}</strong><span>{% block nav %}{% endblock %}</span></header>
+<main>{% block content %}{% endblock %}</main>
+{% if cookie_banner %}
+<div class="banner" id="ag-cookie" data-dismiss-key="{{ popup_key }}-cookie">
+  <p>We use cookies to personalise content and analyse our traffic. By continuing you agree to our cookie policy.</p>
+  <button onclick="agDismiss('ag-cookie')">Accept all</button>
+  <button onclick="agDismiss('ag-cookie')">Reject non-essential</button>
+</div>
+{% endif %}
+{% if promo_modal %}
+<div class="backdrop" id="ag-modal" data-dismiss-key="{{ popup_key }}-modal">
+  <div class="modal" role="dialog" aria-label="Survey">
+    <h3>Help us improve!</h3>
+    <p>Would you take a 2-minute survey about our new billing portal?</p>
+    <button>Take survey</button>
+    <button onclick="agDismiss('ag-modal')">No thanks</button>
+  </div>
+</div>
+{% endif %}
+<script>
+  function agDismiss(id) {
+    var el = document.getElementById(id);
+    try { sessionStorage.setItem(el.dataset.dismissKey, '1'); } catch (e) {}
+    el.remove();
+  }
+  document.querySelectorAll('[data-dismiss-key]').forEach(function (el) {
+    try { if (sessionStorage.getItem(el.dataset.dismissKey)) el.remove(); } catch (e) {}
+  });
+</script>
+</body>
+</html>

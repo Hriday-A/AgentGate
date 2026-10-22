@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>AgentGate mock portals</h2>
+<p>Environments are created by the eval runner via <code>POST /admin/envs</code> (<a href="/admin/docs">API docs</a>).</p>
+<ul>
+  <li><a href="/demo?seed=1&difficulty=easy">Demo environment, easy</a></li>
+  <li><a href="/demo?seed=1&difficulty=medium">Demo environment, medium</a></li>
+  <li><a href="/demo?seed=1&difficulty=hard">Demo environment, hard</a></li>
+</ul>
+{% endblock %}
