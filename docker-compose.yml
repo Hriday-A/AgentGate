@@ -1,0 +1,53 @@
+# Whole stack locally: docker compose up --build, then open http://localhost:3000
+# (dev sign-in is on by default here; for GitHub sign-in see README "GitHub OAuth").
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agentgate
+      POSTGRES_USER: agentgate
+      POSTGRES_PASSWORD: agentgate
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentgate"]
+      interval: 3s
+      retries: 20
+
+  api:
+    build: ./api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/agentgate
+      DATABASE_USER: agentgate
+      DATABASE_PASSWORD: agentgate
+      APP_URL: http://localhost:3000
+      DEV_LOGIN: ${DEV_LOGIN:-true}
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+    volumes:
+      - artifacts:/data
+    ports:
+      - "8080:8080"
+
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        API_URL: http://api:8080
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+  portals:
+    build: .
+    ports:
+      - "5055:5055"
+
+volumes:
+  pgdata:
+  artifacts:

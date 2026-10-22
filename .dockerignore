@@ -1,0 +1,7 @@
+.venv
+.git
+runs
+practice
+api
+dashboard
+**/__pycache__
