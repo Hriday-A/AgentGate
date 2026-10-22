@@ -4,7 +4,7 @@
 {% block nav %}<a href="{{ url_for('ap_list', env_id=env.id) }}">All invoices</a>{% endblock %}
 {% block content %}
 <h2>Record a vendor invoice</h2>
-{% for e in errors %}<p class="error">{{ e }}</p>{% endfor %}
+{% for e in errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
 <form method="post">
   <label for="vendor">Vendor</label>
   <select id="vendor" name="vendor">

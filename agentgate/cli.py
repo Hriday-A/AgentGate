@@ -13,7 +13,12 @@ def main(argv: list[str] | None = None) -> int:
 
     run = sub.add_parser("run", help="Run the invoice suite against the reference agent")
     run.add_argument("--model", default=DEFAULT_MODEL, help="provider:model, e.g. ollama:llama3.2")
-    run.add_argument("--tasks", help="glob over task ids, e.g. 'acme-*'")
+    run.add_argument("--agent", choices=["graph", "react"], default="graph")
+    run.add_argument("--extract-model", help="model for invoice extraction (default: same as --model)")
+    run.add_argument("--label", help="name for this configuration in reports")
+    run.add_argument("--smoke", action="store_true", help="only the CI smoke subset")
+    run.add_argument("--difficulty", choices=["easy", "medium", "hard"])
+    run.add_argument("--tasks", help="glob over task ids, e.g. 'hard-acme-*'")
     run.add_argument("--limit", type=int, help="run only the first N matching tasks")
     run.add_argument("--max-steps", type=int, default=30)
     run.add_argument("--concurrency", type=int, default=1)
@@ -26,6 +31,9 @@ def main(argv: list[str] | None = None) -> int:
     cmp_.add_argument("baseline")
     cmp_.add_argument("current")
     cmp_.add_argument("--max-drop", type=float, default=5.0, help="allowed drop in success rate, in points")
+
+    rep = sub.add_parser("report", help="Comparison table (Markdown) across results.json files")
+    rep.add_argument("results", nargs="+", type=Path)
 
     portals = sub.add_parser("portals", help="Serve the mock portals")
     portals.add_argument("--host", default="127.0.0.1")
@@ -51,8 +59,12 @@ def main(argv: list[str] | None = None) -> int:
         from .runner.run import run_suite
         return run_suite(args)
     if args.cmd == "compare":
-        from .runner.run import compare
+        from .runner.report import compare
         return compare(args.baseline, args.current, args.max_drop)
+    if args.cmd == "report":
+        from .runner.report import comparison_table
+        print(comparison_table(args.results))
+        return 0
     if args.cmd == "extract":
         from .extraction.extract import extract_invoice
         from .llm import make_llm

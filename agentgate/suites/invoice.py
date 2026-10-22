@@ -1,8 +1,8 @@
 """Invoice-processing suite: task kinds, their prompts and their checkers.
 
-A task in invoice.yaml names a kind, a vendor and a seed. The kind turns the
-environment's initial state into a prompt and a checker, so expected values
-always come from the same generator the portals use.
+A task in invoice.yaml names a kind, a vendor, a difficulty and a seed. The
+kind turns the environment's initial state into a prompt and a checker, so
+expected values always come from the same generator the portals use.
 """
 from __future__ import annotations
 
@@ -30,6 +30,8 @@ class Task:
     kind: str
     vendor: str
     seed: int
+    difficulty: str = "medium"
+    smoke: bool = False  # part of the small subset CI runs on every pull request
 
 
 @dataclass
@@ -37,6 +39,8 @@ class Prepared:
     prompt: str
     expected: object
     check: Callable[[dict, str | None], tuple[bool, str]]
+    # Data-entry tasks also score each AP field, so partial credit is visible in the metrics.
+    fields: Callable[[dict], dict[str, bool]] | None = None
 
 
 def load_tasks(path: Path = SUITE_FILE) -> list[Task]:
@@ -98,27 +102,40 @@ def check_date(expected: str):
     return check
 
 
+AP_FIELDS = {  # AP entry key -> ground-truth invoice key
+    "invoice_number": "number", "invoice_date": "issue_date", "due_date": "due_date", "po_number": "po_number",
+    "subtotal_cents": "subtotal_cents", "tax_cents": "tax_cents", "shipping_cents": "shipping_cents",
+    "amount_cents": "amount_cents",
+}
+
+
+def ap_field_scores(vendor: str, inv: dict):
+    """Per-field correctness of the single AP entry (all False if there isn't exactly one)."""
+    def scores(state: dict) -> dict[str, bool]:
+        entries = state["ap_entries"]
+        if len(entries) != 1:
+            return {"vendor": False, **{k: False for k in AP_FIELDS}}
+        e = entries[0]
+        result = {"vendor": e["vendor"] == vendor}
+        for key, truth_key in AP_FIELDS.items():
+            got, want = e.get(key), inv[truth_key]
+            result[key] = (got.strip().lower() == want.lower()) if key == "invoice_number" else got == want
+        return result
+    return scores
+
+
 def check_ap_entry(vendor: str, inv: dict):
+    scores = ap_field_scores(vendor, inv)
+
     def check(state: dict, _answer: str | None) -> tuple[bool, str]:
         entries = state["ap_entries"]
         if len(entries) != 1:
             return False, f"expected exactly 1 AP entry, found {len(entries)}"
+        wrong = [k for k, ok in scores(state).items() if not ok]
         e = entries[0]
-        problems = []
-        if e["vendor"] != vendor:
-            problems.append(f"vendor {e['vendor']} != {vendor}")
-        if e["invoice_number"].strip().lower() != inv["number"].lower():
-            problems.append(f"number {e['invoice_number']} != {inv['number']}")
-        if e["invoice_date"] != inv["issue_date"]:
-            problems.append(f"invoice_date {e['invoice_date']} != {inv['issue_date']}")
-        if e["due_date"] != inv["due_date"]:
-            problems.append(f"due_date {e['due_date']} != {inv['due_date']}")
-        if e.get("po_number") != inv["po_number"]:
-            problems.append(f"po_number {e.get('po_number')} != {inv['po_number']}")
-        for key in ("subtotal_cents", "tax_cents", "shipping_cents", "amount_cents"):
-            if e.get(key) != inv[key]:
-                problems.append(f"{key} {e.get(key)} != {inv[key]}")
-        return not problems, "; ".join(problems) or "entry matches"
+        details = [f"{k} {e.get(k)!r} != {inv[AP_FIELDS[k]]!r}" if k in AP_FIELDS else f"vendor {e['vendor']} != {vendor}"
+                   for k in wrong]
+        return not wrong, "; ".join(details) or "entry matches"
     return check
 
 
@@ -165,12 +182,12 @@ def prepare(task: Task, state: dict) -> Prepared:
         inv = _pick(task, invoices)
         prompt = (f"Record invoice {inv['number']} from {vname} in our Accounts Payable app. "
                   "Download the invoice PDF from their vendor portal and copy every field the AP form asks for.")
-        return Prepared(f"{prompt} {CREDS}", inv, check_ap_entry(task.vendor, inv))
+        return Prepared(f"{prompt} {CREDS}", inv, check_ap_entry(task.vendor, inv), ap_field_scores(task.vendor, inv))
 
     if task.kind == "enter_oldest_unpaid":
         inv = min(_unpaid(invoices), key=lambda i: i["issue_date"])
         prompt = (f"Find the oldest unpaid invoice (by invoice date) in the {vname} vendor portal and record it "
                   f"in our Accounts Payable app, using the invoice PDF for every field the form asks for. {open_note}")
-        return Prepared(f"{prompt} {CREDS}", inv, check_ap_entry(task.vendor, inv))
+        return Prepared(f"{prompt} {CREDS}", inv, check_ap_entry(task.vendor, inv), ap_field_scores(task.vendor, inv))
 
     raise ValueError(f"Unknown task kind {task.kind!r}")

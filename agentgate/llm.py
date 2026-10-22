@@ -121,8 +121,10 @@ def _data_url(image: bytes) -> str:
 class OpenAICompatLLM:
     """Any endpoint that implements POST /chat/completions in OpenAI's format."""
 
-    def __init__(self, provider: str, model: str, timeout: float = 120.0, max_retries: int = 5):
+    def __init__(self, provider: str, model: str, timeout: float | None = None, max_retries: int = 5):
         base_url, key_env, rpm = OPENAI_COMPAT[provider]
+        # Local models on a laptop can take minutes per call; hosted ones shouldn't.
+        timeout = timeout or float(os.environ.get("AGENTGATE_LLM_TIMEOUT", 600 if provider == "ollama" else 120))
         self.provider, self.model = provider, model
         key = os.environ.get(key_env, "") if key_env else "local"
         if key_env and not key:

@@ -7,9 +7,12 @@ from agentgate.suites import invoice
 TASKS = invoice.load_tasks()
 
 
-def test_suite_has_30_unique_tasks():
-    assert len(TASKS) == 30
-    assert len({t.id for t in TASKS}) == 30
+def test_suite_has_54_unique_tasks():
+    assert len(TASKS) == 54
+    assert len({t.id for t in TASKS}) == 54
+    assert {t.difficulty for t in TASKS} == {"easy", "medium", "hard"}
+    smoke = [t for t in TASKS if t.smoke]
+    assert len({t.kind for t in smoke}) == len(smoke) == 6  # one smoke task per kind
 
 
 @pytest.mark.parametrize("task", TASKS, ids=lambda t: t.id)
@@ -27,6 +30,7 @@ def test_oracle_passes_and_wrong_answer_fails(task):
             "amount_cents": inv["amount_cents"],
         }]}
         assert prepared.check(good, "done") == (True, "entry matches")
+        assert all(prepared.fields(good).values())
         bad_amount = {**good, "ap_entries": [{**good["ap_entries"][0], "amount_cents": inv["amount_cents"] + 1}]}
         assert not prepared.check(bad_amount, "done")[0]
         assert not prepared.check(state, "done")[0]  # nothing recorded
