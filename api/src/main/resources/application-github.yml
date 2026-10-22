@@ -1,0 +1,12 @@
+# Activated with SPRING_PROFILES_ACTIVE=github once a GitHub OAuth App exists.
+# Callback URL to register on GitHub: ${APP_URL}/login/oauth2/code/github
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          github:
+            client-id: ${GITHUB_CLIENT_ID}
+            client-secret: ${GITHUB_CLIENT_SECRET}
+            scope: read:user
+            redirect-uri: ${APP_URL:http://localhost:3000}/login/oauth2/code/github

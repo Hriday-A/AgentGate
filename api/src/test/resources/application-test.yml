@@ -1,0 +1,8 @@
+spring:
+  datasource:
+    url: ${TEST_DATABASE_URL:jdbc:postgresql://localhost:5432/agentgate_test}
+    username: ${DATABASE_USER:${USER:postgres}}
+    password: ${DATABASE_PASSWORD:}
+agentgate:
+  dev-login: true
+  storage-dir: ${java.io.tmpdir}/agentgate-test-storage

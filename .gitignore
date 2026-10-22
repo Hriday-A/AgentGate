@@ -8,3 +8,8 @@ runs/
 
 # Personal practice notes, not part of the project
 practice/
+
+# Java API
+api/target/
+api/storage/
+storage/

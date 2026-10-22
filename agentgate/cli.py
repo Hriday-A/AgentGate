@@ -32,6 +32,11 @@ def main(argv: list[str] | None = None) -> int:
     cmp_.add_argument("current")
     cmp_.add_argument("--max-drop", type=float, default=5.0, help="allowed drop in success rate, in points")
 
+    pub = sub.add_parser("publish", help="Send a run to the AgentGate API (dashboard)")
+    pub.add_argument("run_dir", type=Path)
+    pub.add_argument("--api-url", default=os.environ.get("AGENTGATE_API_URL", "http://localhost:8080"))
+    pub.add_argument("--api-key", default=os.environ.get("AGENTGATE_API_KEY"), help="or set AGENTGATE_API_KEY")
+
     rep = sub.add_parser("report", help="Comparison table (Markdown) across results.json files")
     rep.add_argument("results", nargs="+", type=Path)
 
@@ -61,6 +66,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "compare":
         from .runner.report import compare
         return compare(args.baseline, args.current, args.max_drop)
+    if args.cmd == "publish":
+        from .runner.publish import publish
+        if not args.api_key:
+            parser.error("an API key is required (--api-key or AGENTGATE_API_KEY)")
+        publish(args.run_dir, args.api_url, args.api_key)
+        return 0
     if args.cmd == "report":
         from .runner.report import comparison_table
         print(comparison_table(args.results))

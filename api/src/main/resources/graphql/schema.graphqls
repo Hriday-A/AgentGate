@@ -1,0 +1,175 @@
+type Query {
+  "The signed-in user, or null."
+  me: User
+  agents: [Agent!]!
+  agent(id: ID!): Agent
+  run(id: ID!): Run
+  taskResult(id: ID!): TaskResult
+}
+
+type Mutation {
+  "Register an agent. The API key is returned once and never stored in plain text."
+  createAgent(name: String!, description: String): CreatedAgent!
+  rotateApiKey(agentId: ID!): CreatedAgent!
+  deleteAgent(agentId: ID!): Boolean!
+  "Called by the eval runner with the agent's API key (X-Api-Key). Re-ingesting a run replaces it."
+  ingestRun(input: RunInput!): Run!
+}
+
+type User {
+  id: ID!
+  login: String!
+  name: String
+  avatarUrl: String
+}
+
+type Agent {
+  id: ID!
+  name: String!
+  description: String
+  apiKeyPrefix: String!
+  createdAt: String!
+  runs(limit: Int = 50): [Run!]!
+  latestRun: Run
+  "Oldest first, for charting."
+  trend(limit: Int = 30): [TrendPoint!]!
+}
+
+type CreatedAgent {
+  agent: Agent!
+  apiKey: String!
+}
+
+type Run {
+  id: ID!
+  externalId: String!
+  label: String!
+  agentKind: String
+  model: String
+  extractModel: String
+  gitSha: String
+  gitBranch: String
+  createdAt: String!
+  tasks: Int!
+  passed: Int!
+  successRate: Float!
+  fieldAccuracy: Float
+  avgSteps: Float!
+  p50Seconds: Float!
+  p95Seconds: Float!
+  inputTokens: Float!
+  outputTokens: Float!
+  totalCostUsd: Float
+  costPerTask: Float
+  byDifficulty: [DifficultyStat!]!
+  results(onlyFailed: Boolean = false): [TaskResult!]!
+}
+
+type DifficultyStat {
+  difficulty: String!
+  tasks: Int!
+  passed: Int!
+  successRate: Float!
+}
+
+type TaskResult {
+  id: ID!
+  taskId: String!
+  kind: String!
+  vendor: String!
+  difficulty: String!
+  passed: Boolean!
+  failure: String
+  detail: String
+  answer: String
+  fieldAccuracy: Float
+  steps: Int!
+  replans: Int!
+  seconds: Float!
+  inputTokens: Float!
+  outputTokens: Float!
+  costUsd: Float
+  run: Run!
+  trace: [Step!]!
+}
+
+type Step {
+  stepNo: Int!
+  action: String
+  args: String
+  thought: String
+  outcome: String
+  ok: Boolean
+  verified: Boolean
+  feedback: String
+  url: String
+  "Relative URL of the screenshot taken after this step, if one was uploaded."
+  screenshotUrl: String
+}
+
+type TrendPoint {
+  runId: ID!
+  label: String!
+  createdAt: String!
+  successRate: Float!
+  fieldAccuracy: Float
+  p95Seconds: Float!
+  costPerTask: Float
+}
+
+input RunInput {
+  externalId: String!
+  label: String!
+  agentKind: String
+  model: String
+  extractModel: String
+  gitSha: String
+  gitBranch: String
+  summary: SummaryInput!
+  results: [TaskResultInput!]!
+}
+
+input SummaryInput {
+  tasks: Int!
+  passed: Int!
+  successRate: Float!
+  fieldAccuracy: Float
+  avgSteps: Float!
+  p50Seconds: Float!
+  p95Seconds: Float!
+  inputTokens: Float!
+  outputTokens: Float!
+  totalCostUsd: Float
+}
+
+input TaskResultInput {
+  taskId: String!
+  kind: String!
+  vendor: String!
+  difficulty: String!
+  passed: Boolean!
+  failure: String
+  detail: String
+  answer: String
+  fieldAccuracy: Float
+  steps: Int!
+  replans: Int
+  seconds: Float!
+  inputTokens: Float!
+  outputTokens: Float!
+  costUsd: Float
+  trace: [StepInput!]
+}
+
+input StepInput {
+  stepNo: Int!
+  action: String
+  args: String
+  thought: String
+  outcome: String
+  ok: Boolean
+  verified: Boolean
+  feedback: String
+  url: String
+  screenshot: String
+}

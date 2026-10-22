@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: agentgate-api
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/agentgate}
+    username: ${DATABASE_USER:${USER:postgres}}
+    password: ${DATABASE_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none   # Flyway owns the schema (src/main/resources/db/migration)
+  graphql:
+    graphiql:
+      enabled: ${GRAPHIQL:false}
+  servlet:
+    multipart:
+      max-file-size: 5MB
+
+server:
+  port: ${PORT:8080}
+  servlet:
+    session:
+      cookie:
+        same-site: lax
+        http-only: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+agentgate:
+  # The dashboard's public URL: OAuth and logout send the browser back here.
+  app-url: ${APP_URL:http://localhost:3000}
+  storage-dir: ${STORAGE_DIR:./storage}
+  # Local-only sign-in without GitHub, for development and demos. Never enable in production.
+  dev-login: ${DEV_LOGIN:false}
