@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install -e '.[dev]'
+          python -m playwright install --with-deps chromium
+      - name: Unit, integration and browser tests
+        run: python -m pytest -q
+
+  eval-gate:
+    # Runs the smoke subset of the eval suite against a real model and fails the
+    # build if success drops versus the committed baseline.
+    needs: tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      AGENTGATE_MODEL: ${{ vars.AGENTGATE_MODEL || 'gemini:gemini-2.5-flash' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Check for model credentials
+        id: creds
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::notice::GEMINI_API_KEY secret not set (or PR from a fork); skipping the eval gate."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install
+        if: steps.creds.outputs.available == 'true'
+        run: |
+          pip install -e '.[dev]'
+          python -m playwright install --with-deps chromium
+      - name: Run smoke eval
+        if: steps.creds.outputs.available == 'true'
+        run: python -m agentgate run --smoke --label "PR #${{ github.event.number }}" --out runs
+      - name: Report
+        if: steps.creds.outputs.available == 'true' && always()
+        run: |
+          {
+            echo "## Eval smoke run"
+            python -m agentgate report baselines/smoke.json runs/*/results.json 2>/dev/null || python -m agentgate report runs/*/results.json
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Regression gate
+        if: steps.creds.outputs.available == 'true'
+        run: |
+          if [ ! -f baselines/smoke.json ]; then
+            echo "::warning::No baseline yet. Commit runs/<id>/results.json as baselines/smoke.json to enable the gate."
+            exit 0
+          fi
+          # 6 tasks: one task is ~17 pts, so this tolerates one flaky task but fails on two.
+          python -m agentgate compare baselines/smoke.json runs/*/results.json --max-drop 20
+      - name: Upload traces
+        if: steps.creds.outputs.available == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-traces
+          path: runs/
+          retention-days: 14
