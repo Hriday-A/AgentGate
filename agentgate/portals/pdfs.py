@@ -23,6 +23,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen.canvas import Canvas
 
+from ..pdfium_lock import PDFIUM_LOCK
 from .data import BILL_TO, VENDORS, Invoice, fmt_date, fmt_money
 
 W, H = letter  # 612 x 792 points; (0, 0) is the bottom-left corner
@@ -230,8 +231,16 @@ TEMPLATES = {"classic": _classic, "european": _european, "statement": _statement
 # --- scanned variant ---------------------------------------------------------
 
 def _scanify(pdf_bytes: bytes, rng: random.Random) -> bytes:
-    page = pdfium.PdfDocument(pdf_bytes)[0]
-    img = page.render(scale=SCAN_DPI / 72).to_pil().convert("L")  # 72 points per inch
+    with PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(pdf_bytes)
+        try:
+            page = doc[0]
+            bitmap = page.render(scale=SCAN_DPI / 72)  # 72 points per inch
+            img = bitmap.to_pil().convert("L")  # convert() copies the pixels out of pdfium's buffer
+            bitmap.close()
+            page.close()
+        finally:
+            doc.close()
 
     # A slightly crooked page.
     img = img.rotate(rng.uniform(-1.5, 1.5), resample=Image.Resampling.BICUBIC, expand=True, fillcolor=255)

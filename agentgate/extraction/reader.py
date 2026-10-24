@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import pypdfium2 as pdfium
 
+from ..pdfium_lock import PDFIUM_LOCK
+
 MIN_TEXT_CHARS = 20  # fewer characters than this means "no usable text layer" (e.g. a scan)
 
 
@@ -20,18 +22,35 @@ class PdfContent:
 
 
 def read_text(pdf: bytes) -> PdfContent:
-    doc = pdfium.PdfDocument(pdf)
-    text = "\n".join(page.get_textpage().get_text_range() for page in doc)
-    return PdfContent(text=text, pages=len(doc))
+    with PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(pdf)
+        try:
+            texts = []
+            for page in doc:
+                textpage = page.get_textpage()
+                texts.append(textpage.get_text_range())
+                textpage.close()
+                page.close()
+            return PdfContent(text="\n".join(texts), pages=len(doc))
+        finally:
+            doc.close()
 
 
 def page_images(pdf: bytes, dpi: int = 150, max_pages: int = 3) -> list[bytes]:
     """Render pages to JPEG. 150 dpi keeps small print legible without inflating image tokens."""
     images = []
-    doc = pdfium.PdfDocument(pdf)
-    for i in range(min(len(doc), max_pages)):
-        img = doc[i].render(scale=dpi / 72).to_pil().convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=85)
-        images.append(buf.getvalue())
+    with PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(pdf)
+        try:
+            for i in range(min(len(doc), max_pages)):
+                page = doc[i]
+                bitmap = page.render(scale=dpi / 72)
+                img = bitmap.to_pil().convert("RGB")  # convert() copies, so the bitmap can be freed
+                bitmap.close()
+                page.close()
+                buf = io.BytesIO()
+                img.save(buf, "JPEG", quality=85)
+                images.append(buf.getvalue())
+        finally:
+            doc.close()
     return images
