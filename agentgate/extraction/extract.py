@@ -15,11 +15,13 @@ from typing import Literal
 
 from pydantic import ValidationError
 
-from .reader import page_images, read_text
-from .schema import Invoice, llm_schema
+from .reader import ocr_text, page_images, read_text
+from .schema import Invoice, InvoiceText, llm_schema
 from .validate import Issue, validate
 
 Mode = Literal["auto", "text", "image", "both"]
+Scans = Literal["image", "ocr"]      # how to read a PDF without a text layer
+Amounts = Literal["number", "text"]  # model outputs numbers, or copies printed text that code parses
 
 SYSTEM_PROMPT = """You are an accounts-payable specialist extracting data from vendor invoices.
 
@@ -33,6 +35,10 @@ Rules:
 - Include every line item."""
 
 SCHEMA = llm_schema(Invoice)
+TEXT_SCHEMA = llm_schema(InvoiceText)
+TEXT_AMOUNTS_PROMPT = SYSTEM_PROMPT.replace(
+    '- Amounts: plain numbers, no currency symbols or thousands separators. "1.234,56" means 1234.56.',
+    "- Amounts: copy them exactly as printed, with their currency and separators.")
 
 
 @dataclass
@@ -63,24 +69,29 @@ def _feedback(text: str) -> str:
     return f"\n\nYour previous answer had these problems:\n{text}\nRe-read the document carefully and correct them."
 
 
-def extract_invoice(pdf: bytes, llm, mode: Mode = "auto", repair: bool = True,
-                    max_attempts: int = 3) -> ExtractionResult:
+def extract_invoice(pdf: bytes, llm, mode: Mode = "auto", repair: bool = True, max_attempts: int = 3,
+                    scans: Scans = "image", amounts: Amounts = "number") -> ExtractionResult:
     t0 = time.perf_counter()
     content = read_text(pdf)
+    use_ocr = mode == "auto" and not content.has_text_layer and scans == "ocr"
     use_text = mode in ("text", "both") or (mode == "auto" and content.has_text_layer)
-    use_image = mode in ("image", "both") or (mode == "auto" and not content.has_text_layer)
-    mode_used = "+".join(m for m, on in (("text", use_text), ("image", use_image)) if on)
+    use_image = mode in ("image", "both") or (mode == "auto" and not content.has_text_layer and not use_ocr)
+    mode_used = "+".join(m for m, on in (("text", use_text), ("ocr", use_ocr), ("image", use_image)) if on)
 
     prompt = "Extract this invoice."
     if use_text:
         prompt += f"\n\nText layer of the PDF:\n{content.text}"
+    if use_ocr:
+        prompt += f"\n\nOCR text of the scanned PDF (may contain recognition errors):\n{ocr_text(pdf)}"
     images = page_images(pdf) if use_image else []
+    system, schema, model = ((TEXT_AMOUNTS_PROMPT, TEXT_SCHEMA, InvoiceText) if amounts == "text"
+                             else (SYSTEM_PROMPT, SCHEMA, Invoice))
 
     result = ExtractionResult(invoice=None, issues=[], mode_used=mode_used)
     feedback = ""
     try:
         for _ in range(max_attempts):
-            resp = llm.extract(SYSTEM_PROMPT, prompt + feedback, images, SCHEMA, "invoice")
+            resp = llm.extract(system, prompt + feedback, images, schema, "invoice")
             result.input_tokens += resp.input_tokens
             result.output_tokens += resp.output_tokens
 
@@ -89,8 +100,13 @@ def extract_invoice(pdf: bytes, llm, mode: Mode = "auto", repair: bool = True,
                 feedback = _feedback("- The reply was not a single JSON object matching the schema.")
                 continue
             try:
-                invoice = Invoice.model_validate(resp.data)
-            except ValidationError as e:
+                parsed = model.model_validate(resp.data)
+                invoice = parsed.to_invoice() if isinstance(parsed, InvoiceText) else parsed
+            except ValueError as e:  # pydantic's ValidationError is a ValueError; so is an unparsable amount
+                if not isinstance(e, ValidationError):
+                    result.attempts.append(Attempt(None, [], str(e)))
+                    feedback = _feedback(f"- {e}")
+                    continue
                 errors = "\n".join(f"- {'.'.join(map(str, err['loc']))}: {err['msg']}" for err in e.errors())
                 result.attempts.append(Attempt(None, [], f"Schema errors:\n{errors}"))
                 feedback = _feedback(errors)

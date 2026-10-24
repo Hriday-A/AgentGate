@@ -162,8 +162,8 @@ def _fmt(x: float | None) -> str:
 
 
 def print_report(summary: dict, config: dict) -> None:
-    print(f"\nExtraction eval · {config['model']} · mode={config['mode']} · repair={config['repair']} · "
-          f"n={summary['n']}")
+    print(f"\nExtraction eval · {config['model']} · mode={config['mode']} · scans={config.get('scans', 'image')} · "
+          f"amounts={config.get('amounts', 'number')} · repair={config['repair']} · n={summary['n']}")
     print(f"\n{'SLICE':<22} {'N':>3} {'DOC ACC':>8} {'1ST TRY':>8} {'FIELDS':>8}")
     for name, b in summary["slices"].items():
         print(f"{name:<22} {b['n']:>3} {_fmt(b['doc_accuracy']):>8} {_fmt(b['first_attempt_accuracy']):>8} "

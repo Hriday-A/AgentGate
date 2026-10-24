@@ -7,6 +7,13 @@ from pathlib import Path
 DEFAULT_MODEL = os.environ.get("AGENTGATE_MODEL", "gemini:gemini-3.5-flash")
 
 
+def _add_extraction_flags(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--scans", choices=["image", "ocr"], default="image",
+                   help="read scanned PDFs as page images (vision model) or with Tesseract OCR")
+    p.add_argument("--amounts", choices=["number", "text"], default="number",
+                   help="model returns numbers, or copies printed amounts that code parses")
+
+
 def _add_scaling_flags(p: argparse.ArgumentParser, memory_default: str | None = None) -> None:
     p.add_argument("--small-model", help="route easy steps to this model, e.g. ollama:qwen2.5:1.5b")
     p.add_argument("--router", choices=["rules", "bandit"], default="rules")
@@ -36,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--headed", action="store_true", help="show the browser")
     run.add_argument("--out", default="runs")
     _add_scaling_flags(run)
+    _add_extraction_flags(run)
 
     lrn = sub.add_parser("learn", help="Feedback loop: run, reflect on failures, retry on fresh data")
     lrn.add_argument("--rounds", type=int, default=3)
@@ -55,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     lrn.add_argument("--headed", action="store_true")
     lrn.add_argument("--out", default="runs")
     _add_scaling_flags(lrn, memory_default="memory/lessons.jsonl")
+    _add_extraction_flags(lrn)
 
     cmp_ = sub.add_parser("compare", help="Regression gate between two results.json files")
     cmp_.add_argument("baseline")
@@ -78,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     ext.add_argument("--model", default=DEFAULT_MODEL)
     ext.add_argument("--mode", choices=["auto", "text", "image", "both"], default="auto")
     ext.add_argument("--no-repair", action="store_true")
+    _add_extraction_flags(ext)
 
     xev = sub.add_parser("extract-eval", help="Measure extraction accuracy against ground truth")
     xev.add_argument("--model", default=DEFAULT_MODEL)
@@ -87,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     xev.add_argument("--no-repair", action="store_true", help="disable validation-guided retries")
     xev.add_argument("--concurrency", type=int, default=2)
     xev.add_argument("--out", default="runs", type=Path)
+    _add_extraction_flags(xev)
     xev.add_argument("--cache", action="store_true")
     xev.add_argument("--cache-path", default=".cache/llm.sqlite")
 
@@ -115,7 +126,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "extract":
         from .extraction.extract import extract_invoice
         from .llm import make_llm
-        result = extract_invoice(args.pdf.read_bytes(), make_llm(args.model), args.mode, not args.no_repair)
+        result = extract_invoice(args.pdf.read_bytes(), make_llm(args.model), args.mode, not args.no_repair,
+                                 scans=args.scans, amounts=args.amounts)
         print(json.dumps({
             "invoice": result.invoice.model_dump(mode="json") if result.invoice else None,
             "issues": [i.message for i in result.issues],
@@ -128,10 +140,11 @@ def main(argv: list[str] | None = None) -> int:
         from .middleware import build_llm
         llm = build_llm(args.model, cache=args.cache_path if args.cache else None)
         config = {"model": args.model, "mode": args.mode, "repair": not args.no_repair,
-                  "n": args.n, "scanned_share": args.scanned}
+                  "n": args.n, "scanned_share": args.scanned, "scans": args.scans, "amounts": args.amounts}
         results = evaluate.run(
             evaluate.make_samples(args.n, args.scanned),
-            lambda pdf: extract_invoice(pdf, llm, args.mode, not args.no_repair),
+            lambda pdf: extract_invoice(pdf, llm, args.mode, not args.no_repair,
+                                        scans=args.scans, amounts=args.amounts),
             config, args.out, args.concurrency)
         evaluate.print_report(results["summary"], config)
         print(f"\nResults: {results['path']}")

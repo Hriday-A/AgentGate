@@ -129,7 +129,9 @@ def run_task(task: invoice.Task, opts, run_dir: Path) -> dict:
                 browser = p.chromium.launch(headless=not opts.headed)
                 page = browser.new_context(viewport={"width": 1280, "height": 900}, accept_downloads=True).new_page()
                 page.goto(env["home"])
-                toolbox = Toolbox(page, lambda pdf: extract_invoice(pdf, extract_llm), task_dir)
+                toolbox = Toolbox(page, lambda pdf: extract_invoice(
+                    pdf, extract_llm, scans=getattr(opts, "scans", "image"),
+                    amounts=getattr(opts, "amounts", "number")), task_dir)
                 result = agent.run(prepared.prompt, toolbox, hints)
                 browser.close()
             final_state = _http("GET", state_url)

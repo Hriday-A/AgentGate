@@ -195,3 +195,85 @@ def test_eval_scores_field_errors_and_validator_blind_spots():
     assert s["per_field"]["po_number"] == pytest.approx(4 / 6, abs=1e-3)
     assert s["doc_accuracy"] == pytest.approx(4 / 6, abs=1e-3)
     assert s["validator_recall"] == 0.0  # wrong PO numbers pass every business rule
+
+
+# --- amounts as printed text, parsed in code ---------------------------------
+
+from agentgate.extraction.schema import InvoiceText, parse_amount  # noqa: E402
+
+
+@pytest.mark.parametrize("text, value", [
+    ("$1,234.50", 1234.5), ("1.234,50 USD", 1234.5), ("USD 1234.50", 1234.5), ("13.415,68 USD", 13415.68),
+    ("0,00 USD", 0.0), ("$0.00", 0.0), ("USD 15.00", 15.0), ("1,234", 1234.0), ("1.234", 1234.0),
+    ("12.345.678,90", 12345678.9), ("-$5.10", -5.1), ("49,99", 49.99),
+])
+def test_parse_amount_us_and_european(text, value):
+    assert parse_amount(text) == pytest.approx(value)
+
+
+def test_parse_amount_rejects_non_numbers():
+    with pytest.raises(ValueError):
+        parse_amount("n/a")
+
+
+def printed(inv: data.Invoice) -> dict:
+    """What a model copying amounts verbatim would return (vendor-formatted strings)."""
+    m = lambda c: data.fmt_money(c, inv.vendor)  # noqa: E731
+    reply = as_extraction(inv)
+    reply.update(subtotal=m(inv.subtotal_cents), tax=m(inv.tax_cents), shipping=m(inv.shipping_cents),
+                 total=m(inv.amount_cents))
+    reply["line_items"] = [{"description": l["description"], "quantity": l["qty"], "unit_price": m(l["unit_cents"]),
+                            "amount": m(l["qty"] * l["unit_cents"])} for l in inv.lines]
+    return reply
+
+
+def test_text_amounts_round_trip_for_every_vendor_format(invoices):
+    for inv in invoices:  # US, European and "USD 1234.50" styles
+        result = extract_invoice(render_invoice_pdf(inv, 11), ScriptedLLM(printed(inv)), amounts="text")
+        assert result.issues == [], (inv.vendor, result.issues)
+        assert evaluate.score(result.invoice, evaluate.truth(inv)) == {f: True for f in evaluate.FIELDS}
+
+
+def test_unparsable_text_amount_is_fed_back(invoices):
+    bad = {**printed(invoices[0]), "total": "see attached"}
+    llm = ScriptedLLM(bad, printed(invoices[0]))
+    result = extract_invoice(render_invoice_pdf(invoices[0], 11), llm, amounts="text")
+    assert len(result.attempts) == 2 and "see attached" in llm.calls[1]["prompt"]
+
+
+def test_text_schema_has_string_amounts():
+    schema = llm_schema(InvoiceText)
+    assert schema["properties"]["total"]["type"] == "string"
+    assert schema["properties"]["line_items"]["items"]["properties"]["amount"]["type"] == "string"
+
+
+# --- OCR for scans -----------------------------------------------------------
+
+import shutil  # noqa: E402
+
+from agentgate.extraction.reader import ocr_text  # noqa: E402
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract not installed")
+def test_ocr_reads_a_scanned_invoice(invoices):
+    inv = invoices[0]
+    inv.scanned = True
+    try:
+        pdf = render_invoice_pdf(inv, 11)
+    finally:
+        inv.scanned = False
+    text = ocr_text(pdf)
+    assert inv.number in text and inv.po_number in text
+
+
+def test_ocr_scan_strategy_sends_text_not_images(invoices, monkeypatch):
+    import agentgate.extraction.extract as ex
+    monkeypatch.setattr(ex, "ocr_text", lambda pdf: "OCR SAYS HELLO")
+    inv = invoices[1]
+    inv.scanned = True
+    try:
+        llm = ScriptedLLM(as_extraction(inv))
+        result = extract_invoice(render_invoice_pdf(inv, 11), llm, scans="ocr")
+    finally:
+        inv.scanned = False
+    assert result.mode_used == "ocr" and llm.calls[0]["images"] == 0 and "OCR SAYS HELLO" in llm.calls[0]["prompt"]
