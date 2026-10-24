@@ -1,7 +1,7 @@
 """Model backends shared by the agent and the extractor.
 
 A model is named "provider:model", e.g.
-  gemini:gemini-2.5-flash        (free tier via Google AI Studio)
+  gemini:gemini-3.5-flash        (free tier via Google AI Studio)
   ollama:llama3.2                (local)
   groq:… / openrouter:… / hf:…   (any OpenAI-compatible endpoint)
 

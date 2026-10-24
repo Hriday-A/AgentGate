@@ -85,7 +85,7 @@ jobs:
     timeout-minutes: 30
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      AGENTGATE_MODEL: ${{ vars.AGENTGATE_MODEL || 'gemini:gemini-2.5-flash' }}
+      AGENTGATE_MODEL: ${{ vars.AGENTGATE_MODEL || 'gemini:gemini-3.5-flash' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

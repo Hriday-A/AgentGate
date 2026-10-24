@@ -31,7 +31,7 @@ def test_make_llm_validates_spec(monkeypatch):
     with pytest.raises(ValueError):
         make_llm("gemini")
     with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):
-        make_llm("gemini:gemini-2.5-flash")
+        make_llm("gemini:gemini-3.5-flash")
 
 
 def _llm_with(handler) -> OpenAICompatLLM:

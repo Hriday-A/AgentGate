@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-DEFAULT_MODEL = os.environ.get("AGENTGATE_MODEL", "gemini:gemini-2.5-flash")
+DEFAULT_MODEL = os.environ.get("AGENTGATE_MODEL", "gemini:gemini-3.5-flash")
 
 
 def _add_scaling_flags(p: argparse.ArgumentParser, memory_default: str | None = None) -> None:
