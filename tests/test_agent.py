@@ -269,3 +269,44 @@ def test_graph_agent_notes_survive_and_ping_pong_is_flagged(server, page):
     assert all("page 1 has ACM-1" in p for p in model.prompts[1:])
     flagged = [s for s in result.trace if "back and forth" in s.get("feedback", "")]
     assert flagged and result.replans >= 1
+
+
+def test_graph_agent_flags_an_exact_repeat_that_changes_nothing(server, page):
+    class Repeater:  # reads the same page over and over
+        def __init__(self):
+            self.prompts = []
+
+        def extract(self, *a):
+            return JSONResponse({"steps": ["Look around"]}, "", 1, 1)
+
+        def complete(self, system, history, tools):
+            self.prompts.append(history[-1]["text"])
+            return LLMResponse("", [ToolCall("r", "read_page", {})], 1, 1)
+
+    env, _ = new_env(server)
+    page.goto(env["home"])
+    model = Repeater()
+    result = GraphAgent(model, max_steps=8).run("anything", Toolbox(page))
+    actions = [s for s in result.trace if "action" in s]
+    assert actions[0]["verified"] and not actions[1]["verified"]
+    assert "exactly this" in actions[1]["feedback"] and result.replans >= 1
+
+
+def test_graph_agent_nudges_after_many_actions_on_one_step(server, page):
+    class Lingerer:  # keeps succeeding without ever marking the step done
+        def __init__(self):
+            self.prompts = []
+
+        def extract(self, *a):
+            return JSONResponse({"steps": ["Look around"]}, "", 1, 1)
+
+        def complete(self, system, history, tools):
+            self.prompts.append(history[-1]["text"])
+            return LLMResponse("", [ToolCall("n", "note", {"text": f"fact {len(self.prompts)}"})], 1, 1)
+
+    env, _ = new_env(server)
+    page.goto(env["home"])
+    model = Lingerer()
+    GraphAgent(model, max_steps=8).run("anything", Toolbox(page))
+    assert not any("actions on the current plan step" in p for p in model.prompts[:6])
+    assert "6 actions on the current plan step" in model.prompts[6]

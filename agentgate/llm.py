@@ -34,6 +34,12 @@ import httpx
 PRICES: dict[str, tuple[float, float]] = {}
 FREE_PROVIDERS = {"ollama", "gemini"}
 
+# Output caps. A tool call needs a few hundred tokens; an invoice with many line items a few thousand.
+# Without a cap, a model stuck repeating itself generates until the request times out, and at
+# temperature 0 every retry does the same thing.
+MAX_TOOL_TOKENS = 2048
+MAX_JSON_TOKENS = 4096
+
 # provider -> (base URL, env var holding the API key, default requests per minute)
 OPENAI_COMPAT = {
     "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", 10),
@@ -230,6 +236,7 @@ class OpenAICompatLLM:
         payload = self._post({
             "model": self.model,
             "temperature": 0,  # reproducible runs, and identical requests can be served from cache
+            "max_tokens": MAX_TOOL_TOKENS,
             "messages": self._messages(system, history),
             "tools": [{"type": "function", "function": {
                 "name": t["name"], "description": t["description"], "parameters": t["input_schema"]}} for t in tools],
@@ -257,7 +264,7 @@ class OpenAICompatLLM:
             else:  # plain JSON mode: the schema has to travel in the prompt instead
                 fmt = {"type": "json_object"}
                 sys_text = f"{system}\n\nReply with one JSON object matching this schema:\n{json.dumps(schema)}"
-            return {"model": self.model, "temperature": 0, "response_format": fmt,
+            return {"model": self.model, "temperature": 0, "max_tokens": MAX_JSON_TOKENS, "response_format": fmt,
                     "messages": [{"role": "system", "content": sys_text}, {"role": "user", "content": content}]}
 
         try:

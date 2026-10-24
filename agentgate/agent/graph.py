@@ -80,6 +80,8 @@ class State(TypedDict, total=False):
     actions: list[str]     # one-line summaries of past actions
     notes: list[str]       # facts the executor chose to keep (see the `note` tool)
     visited: list[str]     # page fingerprint after each action
+    step_actions: int      # actions taken since the current plan step began
+    last_call: tuple[str, str] | None  # (tool, args) of the previous action, to catch exact repeats
     stop: str | None       # set when the run should end
 
 
@@ -201,7 +203,7 @@ class GraphAgent:
             return {"stop": "llm_error"}
         steps = [str(s) for s in (resp.data or {}).get("steps", []) if str(s).strip()] or [state["goal"]]
         self.result.trace.append({"event": "replan" if replanning else "plan", "plan": steps})
-        return {"plan": done_steps + steps, "step_idx": len(done_steps), "failures": 0,
+        return {"plan": done_steps + steps, "step_idx": len(done_steps), "failures": 0, "step_actions": 0,
                 "replans": state.get("replans", 0) + (1 if replanning else 0)}
 
     def execute(self, state: State) -> State:
@@ -214,6 +216,10 @@ class GraphAgent:
             notes += "\n\nExtracted invoice data:\n" + json.dumps(self.toolbox.extractions, indent=1)
         recent = "\n".join(f"  - {a}" for a in state.get("actions", [])[-6:]) or "  (none yet)"
         feedback = f"\n\n⚠ Your last action failed: {state['feedback']}" if state.get("feedback") else ""
+        on_step = state.get("step_actions", 0)
+        if on_step >= 6:
+            feedback += (f"\n\nYou have taken {on_step} actions on the current plan step. If it is already "
+                         "complete, call `step_done`.")
         prompt = (f"Task: {state['goal']}{state.get('hints', '')}\n\nPlan:\n{_plan_text(state['plan'], state['step_idx'])}"
                   f"\n\nRecent actions:\n{recent}{notes}{feedback}\n\nCurrent page:\n{before.render()}")
         try:
@@ -249,6 +255,12 @@ class GraphAgent:
         call, outcome = state.get("call"), state["outcome"]
         after = self.toolbox.browser.snapshot()
         ok, feedback = verify(call, outcome, state.get("before"), after)
+        last = state.get("last_call")
+        if ok and call and last == (call.name, json.dumps(call.args, sort_keys=True)) and \
+                state.get("before") is not None and state["before"].fingerprint == after.fingerprint:
+            ok, feedback = False, (f"You just did exactly this and nothing changed. If the current step is complete, "
+                                   f"call `step_done`; otherwise do the next thing (e.g. after `download`, "
+                                   f"`extract_invoice`).")
         visited = state.get("visited", [])
         if call and call.name in ("click", "navigate", "go_back"):
             visited = visited + [after.fingerprint]
@@ -264,10 +276,13 @@ class GraphAgent:
                    f"{(outcome.message if ok else feedback)[:160]}") if call else "no tool call → FAILED"
         update: State = {"actions": state.get("actions", []) + [summary], "feedback": "" if ok else feedback,
                          "visited": visited,
+                         "last_call": (call.name, json.dumps(call.args, sort_keys=True)) if call else None,
                          "failures": 0 if ok else state.get("failures", 0) + 1}
         if ok and call and call.name == "note":
             update["notes"] = state.get("notes", []) + [str(call.args.get("text", ""))[:500]]
+        update["step_actions"] = state.get("step_actions", 0) + 1
         if ok and call and call.name == "step_done":
+            update["step_actions"] = 0
             update["step_idx"] = min(state["step_idx"] + 1, len(state["plan"]))
         if self.result.steps >= self.max_steps:
             update["stop"] = "max_steps"
