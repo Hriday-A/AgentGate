@@ -12,10 +12,12 @@
 
 plan     LLM writes a short numbered plan for the task (or for what's left of it).
 execute  LLM picks ONE tool call for the current plan step, seeing the plan, recent actions,
-         the last verification feedback and the current page.
+         its notes, the last verification feedback and the current page. Each call starts
+         fresh (no chat history), so `note` is how facts survive leaving a page.
 act      Runs the tool. `step_done` advances the plan; `done` ends the run.
 verify   Deterministic checks, no LLM: did the tool report failure? did the page show an
          error alert (bad login, expired session, form validation)? did a click change nothing?
+         is the agent bouncing between the same two pages?
          Failures are fed back to `execute` as feedback; repeated failures trigger a re-plan.
 """
 from __future__ import annotations
@@ -45,7 +47,8 @@ complete, call `done` (for questions, `answer` holds only the requested value).
 
 Guidelines:
 - Cookie banners and pop-ups block clicks. Dismiss them first.
-- Lists may be paginated. Check every page before concluding something is missing.
+- Lists may be paginated. Check every page before concluding something is missing. Before leaving a
+  page, `note` what you need from it: your notes are shown every turn, pages you left are not.
 - If your session expires, sign in again and continue.
 - Use `fill` to set several form fields in one action.
 - Copy extracted values exactly; the AP form wants dates as YYYY-MM-DD and plain-number amounts."""
@@ -54,7 +57,9 @@ PLAN_SCHEMA = {"type": "object", "properties": {"steps": {"type": "array", "item
                "required": ["steps"]}
 STEP_DONE = _tool("step_done", "Mark the current plan step as completed.",
                   {"note": {"type": "string", "description": "What was achieved"}})
-TOOLS = BROWSER_TOOLS + [STEP_DONE, DONE]
+NOTE = _tool("note", "Write down facts you will need later, e.g. the unpaid invoices on this page.",
+             {"text": {"type": "string"}}, ["text"])
+TOOLS = BROWSER_TOOLS + [NOTE, STEP_DONE, DONE]
 
 MAX_FAILURES = 3   # consecutive failed actions before re-planning
 MAX_REPLANS = 2
@@ -73,6 +78,8 @@ class State(TypedDict, total=False):
     failures: int          # consecutive failed actions
     replans: int
     actions: list[str]     # one-line summaries of past actions
+    notes: list[str]       # facts the executor chose to keep (see the `note` tool)
+    visited: list[str]     # page fingerprint after each action
     stop: str | None       # set when the run should end
 
 
@@ -94,6 +101,14 @@ def verify(call: ToolCall | None, outcome: Outcome, before: Snapshot | None, aft
         if new_alerts:
             return False, "The page now shows: " + " | ".join(new_alerts)
     return True, ""
+
+
+def circling(visited: list[str]) -> bool:
+    """True when the last four pages go A, B, A, B: the agent is bouncing between two pages."""
+    if len(visited) < 4:
+        return False
+    a, b, c, d = visited[-4:]
+    return a == c and b == d and a != b
 
 
 def _plan_text(plan: list[str], idx: int) -> str:
@@ -150,7 +165,8 @@ class GraphAgent:
         # Each action passes through 3 nodes; leave headroom for plan nodes.
         limit = self.max_steps * 3 + (MAX_REPLANS + 1) * 2 + 10
         final = self.graph.invoke({"goal": goal, "hints": formatted, "plan": [], "step_idx": 0, "failures": 0,
-                                   "replans": 0, "actions": [], "feedback": "", "stop": None},
+                                   "replans": 0, "actions": [], "notes": [], "visited": [], "feedback": "",
+                                   "stop": None},
                                   {"recursion_limit": limit})
         self.result.stop_reason = final.get("stop") or "max_steps"
         self.result.plan = final.get("plan", [])
@@ -192,9 +208,10 @@ class GraphAgent:
         if self.result.steps >= self.max_steps:
             return {"stop": "max_steps"}
         before = self.toolbox.browser.snapshot()
-        notes = ""
+        notes = "".join(f"\n  - {n}" for n in state.get("notes", []))
+        notes = f"\n\nYour notes:{notes}" if notes else ""
         if self.toolbox.extractions:
-            notes = "\n\nExtracted invoice data:\n" + json.dumps(self.toolbox.extractions, indent=1)
+            notes += "\n\nExtracted invoice data:\n" + json.dumps(self.toolbox.extractions, indent=1)
         recent = "\n".join(f"  - {a}" for a in state.get("actions", [])[-6:]) or "  (none yet)"
         feedback = f"\n\n⚠ Your last action failed: {state['feedback']}" if state.get("feedback") else ""
         prompt = (f"Task: {state['goal']}{state.get('hints', '')}\n\nPlan:\n{_plan_text(state['plan'], state['step_idx'])}"
@@ -217,6 +234,8 @@ class GraphAgent:
             self.result.answer = str(call.args.get("answer", ""))
             record(self.result, self.toolbox, step, None)
             return {"stop": "done", "outcome": Outcome(True, "finished")}
+        elif call.name == "note":
+            outcome = Outcome(True, "Noted.")
         elif call.name == "step_done":
             outcome = Outcome(True, f"Step {state['step_idx'] + 1} marked done. {call.args.get('note', '')}".strip())
         else:
@@ -230,6 +249,12 @@ class GraphAgent:
         call, outcome = state.get("call"), state["outcome"]
         after = self.toolbox.browser.snapshot()
         ok, feedback = verify(call, outcome, state.get("before"), after)
+        visited = state.get("visited", [])
+        if call and call.name in ("click", "navigate", "go_back"):
+            visited = visited + [after.fingerprint]
+            if ok and circling(visited):
+                ok, feedback = False, ("You are going back and forth between the same two pages. Use `note` to "
+                                       "record what you need from each page, then move on.")
         if hasattr(self.llm, "feedback"):
             self.llm.feedback(ok)  # lets a learning router score the model that chose this action
         self.result.trace[-1]["verified"] = ok
@@ -238,7 +263,10 @@ class GraphAgent:
         summary = (f"{call.name} {json.dumps(call.args)[:120]} → {'ok' if ok else 'FAILED'}: "
                    f"{(outcome.message if ok else feedback)[:160]}") if call else "no tool call → FAILED"
         update: State = {"actions": state.get("actions", []) + [summary], "feedback": "" if ok else feedback,
+                         "visited": visited,
                          "failures": 0 if ok else state.get("failures", 0) + 1}
+        if ok and call and call.name == "note":
+            update["notes"] = state.get("notes", []) + [str(call.args.get("text", ""))[:500]]
         if ok and call and call.name == "step_done":
             update["step_idx"] = min(state["step_idx"] + 1, len(state["plan"]))
         if self.result.steps >= self.max_steps:

@@ -15,7 +15,7 @@ import pytest
 import uvicorn
 
 from agentgate.agent.browser import Snapshot
-from agentgate.agent.graph import GraphAgent, verify
+from agentgate.agent.graph import GraphAgent, circling, verify
 from agentgate.agent.react import ReactAgent
 from agentgate.agent.toolbox import Outcome, Toolbox
 from agentgate.extraction.extract import extract_invoice
@@ -131,6 +131,13 @@ def test_verify_rules():
     assert not verify(None, ok, snap(), snap())[0]
 
 
+def test_circling_detects_two_page_ping_pong():
+    assert circling(["p1", "p2", "p1", "p2"])
+    assert not circling(["p1", "p2", "p1"])
+    assert not circling(["list", "inv1", "list", "inv2"])  # back to the list between invoices is fine
+    assert not circling(["a", "a", "a", "a"])                # handled by the "changed nothing" rule
+
+
 # --- end-to-end with a real browser ------------------------------------------
 
 @pytest.mark.parametrize("agent_cls", [GraphAgent, ReactAgent])
@@ -225,3 +232,40 @@ def test_malformed_tool_arguments_fail_softly(server, page):
                        ("click", "element 3"), ("click", {"element": "abc"})]:
         outcome = tb.run(name, args)
         assert not outcome.ok and outcome.message, (name, args)
+
+
+def test_graph_agent_notes_survive_and_ping_pong_is_flagged(server, page):
+    """A model that flips between list pages gets told it's circling; its notes reach later prompts."""
+    env, _ = new_env(server, pagination=True)
+    page.goto(f"{env['home']}acme/login")
+    tb = Toolbox(page)
+
+    class PingPong:
+        def __init__(self):
+            self.prompts, self.n = [], 0
+
+        def extract(self, *a):
+            return JSONResponse({"steps": ["Read every invoice page"]}, "", 1, 1)
+
+        def complete(self, system, history, tools):
+            prompt = history[-1]["text"]
+            self.prompts.append(prompt)
+            self.n += 1
+            if self.n == 1:
+                return LLMResponse("", [ToolCall("n", "note", {"text": "page 1 has ACM-1"})], 1, 1)
+            if self.n == 2:
+                els = {l: int(i) for i, _, l, _ in ELEMENT.findall(prompt)}
+                return LLMResponse("", [ToolCall("f", "fill", {"fields": [
+                    {"element": els["Email"], "value": data.CREDENTIALS["username"]},
+                    {"element": els["Password"], "value": data.CREDENTIALS["password"]}]})], 1, 1)
+            if self.n == 3:
+                return LLMResponse("", [ToolCall("s", "click", {"element": next(
+                    int(i) for i, t, _, _ in ELEMENT.findall(prompt) if t == "button")})], 1, 1)
+            target = "invoices?page=2" if self.n % 2 else "invoices?page=1"
+            return LLMResponse("", [ToolCall("g", "navigate", {"url": target})], 1, 1)
+
+    model = PingPong()
+    result = GraphAgent(model, max_steps=12).run("Sum the unpaid invoices", tb)
+    assert all("page 1 has ACM-1" in p for p in model.prompts[1:])
+    flagged = [s for s in result.trace if "back and forth" in s.get("feedback", "")]
+    assert flagged and result.replans >= 1
