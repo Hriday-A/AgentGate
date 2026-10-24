@@ -91,3 +91,27 @@ def test_non_object_tool_arguments_become_empty():
 
     resp = _llm_with(handler).complete("s", [{"role": "user", "text": "hi"}], [])
     assert resp.tool_calls[0].args == {}
+
+
+def test_daily_quota_fails_fast_instead_of_retrying(monkeypatch):
+    from agentgate.llm import QuotaExhausted
+    slept = []
+    monkeypatch.setattr(time, "sleep", slept.append)
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(429, json={"error": {"code": 429, "message": "Quota exceeded: limit 20 per day",
+                                                   "details": [{"retryDelay": "36207s"}]}})
+
+    with pytest.raises(QuotaExhausted, match="resets in ~10.1 h"):
+        _llm_with(handler).extract("s", "p", [], {}, "x")
+    assert len(calls) == 1 and slept == []
+
+
+def test_short_server_delay_is_honored(monkeypatch):
+    slept = []
+    monkeypatch.setattr(time, "sleep", slept.append)
+    responses = iter([httpx.Response(429, json={"error": {"details": [{"retryDelay": "7s"}]}}), _reply('{"a": 1}')])
+    assert _llm_with(lambda r: next(responses)).extract("s", "p", [], {}, "x").data == {"a": 1}
+    assert slept == [7.0]

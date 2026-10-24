@@ -71,6 +71,39 @@ class JSONResponse:
     cached: bool = False
 
 
+MAX_RETRY_WAIT = 60.0  # seconds; longer server-requested delays mean "come back later", not "retry"
+
+
+class QuotaExhausted(RuntimeError):
+    """The provider's quota is used up for longer than a run can wait (e.g. a daily free-tier limit)."""
+
+
+def _retry_delay(resp: httpx.Response) -> float | None:
+    """Seconds the server asks us to wait: Retry-After header, or Google's RetryInfo.retryDelay ("36207s")."""
+    header = resp.headers.get("retry-after", "")
+    if header.replace(".", "", 1).isdigit():
+        return float(header)
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    body = body[0] if isinstance(body, list) and body else body
+    for detail in (body.get("error", {}) if isinstance(body, dict) else {}).get("details", []):
+        delay = str(detail.get("retryDelay", ""))
+        if delay.endswith("s") and delay[:-1].replace(".", "", 1).isdigit():
+            return float(delay[:-1])
+    return None
+
+
+def _error_message(resp: httpx.Response) -> str:
+    try:
+        body = resp.json()
+        body = body[0] if isinstance(body, list) and body else body
+        return str(body.get("error", {}).get("message", ""))[:300]
+    except (ValueError, AttributeError):
+        return resp.text[:300]
+
+
 class RateLimiter:
     """Spaces calls to at most `rpm` per minute (0 = unlimited). Shared across threads."""
 
@@ -146,10 +179,14 @@ class OpenAICompatLLM:
             self.limiter.wait()
             resp = self.client.post("/chat/completions", json=body)
             if resp.status_code == 429 or resp.status_code >= 500:
+                delay = _retry_delay(resp)
+                if delay is not None and delay > MAX_RETRY_WAIT:
+                    # A daily quota, not a momentary spike: waiting hours inside a run helps no one.
+                    raise QuotaExhausted(f"{self.spec}: quota exhausted, resets in ~{delay / 3600:.1f} h. "
+                                         f"{_error_message(resp)}")
                 if attempt == self.max_retries:
                     resp.raise_for_status()
-                retry_after = resp.headers.get("retry-after", "")
-                time.sleep(float(retry_after) if retry_after.replace(".", "").isdigit() else 2 ** attempt * 2)
+                time.sleep(delay if delay is not None else 2 ** attempt * 2)
                 continue
             resp.raise_for_status()
             return resp.json()
