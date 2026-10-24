@@ -49,6 +49,8 @@ class ToolCall:
     id: str
     name: str
     args: dict
+    # Provider data that must be sent back with the call on the next turn (Gemini 3 thought signatures).
+    extra: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -174,10 +176,16 @@ class OpenAICompatLLM:
         self.json_schema_supported = True  # flipped off if the endpoint rejects response_format=json_schema
 
     def _post(self, body: dict) -> dict:
-        """POST with rate limiting, and exponential backoff on 429/5xx."""
+        """POST with rate limiting, and exponential backoff on 429/5xx and dropped connections."""
         for attempt in range(self.max_retries + 1):
             self.limiter.wait()
-            resp = self.client.post("/chat/completions", json=body)
+            try:
+                resp = self.client.post("/chat/completions", json=body)
+            except httpx.TransportError:  # timeouts and resets: hosted endpoints occasionally hang one request
+                if attempt == self.max_retries:
+                    raise
+                time.sleep(2 ** attempt * 2)
+                continue
             if resp.status_code == 429 or resp.status_code >= 500:
                 delay = _retry_delay(resp)
                 if delay is not None and delay > MAX_RETRY_WAIT:
@@ -207,7 +215,8 @@ class OpenAICompatLLM:
                     "role": "assistant",
                     "content": msg.get("text", ""),
                     "tool_calls": [
-                        {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": json.dumps(c.args)}}
+                        {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": json.dumps(c.args)},
+                         **({"extra_content": c.extra} if c.extra else {})}
                         for c in msg["tool_calls"]
                     ],
                 })
@@ -234,7 +243,7 @@ class OpenAICompatLLM:
                 args = {}
             if not isinstance(args, dict):  # some models send a bare string or list; tools need an object
                 args = {}
-            calls.append(ToolCall(c.get("id") or f"call_{i}", c["function"]["name"], args))
+            calls.append(ToolCall(c.get("id") or f"call_{i}", c["function"]["name"], args, c.get("extra_content") or {}))
         return LLMResponse(message.get("content") or "", calls, *self._usage(payload), model=self.spec)
 
     def extract(self, system: str, prompt: str, images: list[bytes], schema: dict, name: str) -> JSONResponse:

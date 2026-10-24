@@ -74,6 +74,19 @@ def test_retries_on_429(monkeypatch):
     assert _llm_with(handler).extract("s", "p", [], {}, "x").data == {"n": 1}
 
 
+def test_retries_after_a_timeout(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    attempts = []
+
+    def handler(request):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise httpx.ReadTimeout("hung", request=request)
+        return _reply('{"n": 1}')
+
+    assert _llm_with(handler).extract("s", "p", [], {}, "x").data == {"n": 1} and len(attempts) == 2
+
+
 def test_tool_calls_are_parsed():
     def handler(request):
         return httpx.Response(200, json={"choices": [{"message": {"content": "", "tool_calls": [
@@ -82,6 +95,25 @@ def test_tool_calls_are_parsed():
     resp = _llm_with(handler).complete("s", [{"role": "user", "text": "hi"}],
                                        [{"name": "click", "description": "d", "input_schema": {}}])
     assert resp.tool_calls[0].name == "click" and resp.tool_calls[0].args == {"element": 3}
+
+
+def test_thought_signatures_are_sent_back_with_the_call():
+    sig = {"google": {"thought_signature": "abc"}}
+    sent = []
+
+    def handler(request):
+        sent.append(json.loads(request.content)["messages"])
+        return httpx.Response(200, json={"choices": [{"message": {"content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "extra_content": sig,
+             "function": {"name": "click", "arguments": '{"element": 3}'}}]}}]})
+
+    llm = _llm_with(handler)
+    first = llm.complete("s", [{"role": "user", "text": "hi"}], [])
+    assert first.tool_calls[0].extra == sig
+    llm.complete("s", [{"role": "user", "text": "hi"},
+                       {"role": "assistant", "text": "", "tool_calls": first.tool_calls},
+                       {"role": "tool", "results": [{"id": "c1", "content": "ok"}]}], [])
+    assert sent[1][2]["tool_calls"][0]["extra_content"] == sig
 
 
 def test_non_object_tool_arguments_become_empty():
