@@ -147,3 +147,12 @@ def test_short_server_delay_is_honored(monkeypatch):
     responses = iter([httpx.Response(429, json={"error": {"details": [{"retryDelay": "7s"}]}}), _reply('{"a": 1}')])
     assert _llm_with(lambda r: next(responses)).extract("s", "p", [], {}, "x").data == {"a": 1}
     assert slept == [7.0]
+
+
+def test_truncated_replies_are_flagged():
+    def handler(request):
+        assert json.loads(request.content)["max_tokens"] > 0
+        return httpx.Response(200, json={"choices": [{"finish_reason": "length", "message": {"content": "thinking…"}}]})
+
+    resp = _llm_with(handler).complete("s", [{"role": "user", "text": "hi"}], [])
+    assert resp.truncated and not resp.tool_calls

@@ -34,11 +34,11 @@ import httpx
 PRICES: dict[str, tuple[float, float]] = {}
 FREE_PROVIDERS = {"ollama", "gemini"}
 
-# Output caps. A tool call needs a few hundred tokens; an invoice with many line items a few thousand.
-# Without a cap, a model stuck repeating itself generates until the request times out, and at
-# temperature 0 every retry does the same thing.
-MAX_TOOL_TOKENS = 2048
-MAX_JSON_TOKENS = 4096
+# Output caps, generous enough for reasoning models that think before answering. Without a cap, a
+# model stuck repeating itself generates until the request times out, and at temperature 0 every
+# retry does the same thing.
+MAX_TOOL_TOKENS = 8192
+MAX_JSON_TOKENS = 8192
 
 # provider -> (base URL, env var holding the API key, default requests per minute)
 OPENAI_COMPAT = {
@@ -67,6 +67,7 @@ class LLMResponse:
     output_tokens: int = 0
     model: str = ""        # "provider:model" that actually answered (matters once calls are routed)
     cached: bool = False
+    truncated: bool = False  # the reply hit the output cap
 
 
 @dataclass
@@ -251,7 +252,8 @@ class OpenAICompatLLM:
             if not isinstance(args, dict):  # some models send a bare string or list; tools need an object
                 args = {}
             calls.append(ToolCall(c.get("id") or f"call_{i}", c["function"]["name"], args, c.get("extra_content") or {}))
-        return LLMResponse(message.get("content") or "", calls, *self._usage(payload), model=self.spec)
+        return LLMResponse(message.get("content") or "", calls, *self._usage(payload), model=self.spec,
+                           truncated=payload["choices"][0].get("finish_reason") == "length")
 
     def extract(self, system: str, prompt: str, images: list[bytes], schema: dict, name: str) -> JSONResponse:
         content: list[dict] = [{"type": "text", "text": prompt}]

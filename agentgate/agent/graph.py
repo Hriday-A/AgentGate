@@ -82,6 +82,7 @@ class State(TypedDict, total=False):
     visited: list[str]     # page fingerprint after each action
     step_actions: int      # actions taken since the current plan step began
     last_call: tuple[str, str] | None  # (tool, args) of the previous action, to catch exact repeats
+    truncated: bool        # the last reply hit the output cap before calling a tool
     stop: str | None       # set when the run should end
 
 
@@ -227,7 +228,8 @@ class GraphAgent:
         except Exception as e:
             self.result.error = f"{type(e).__name__}: {e}"
             return {"stop": "llm_error"}
-        return {"call": resp.tool_calls[0] if resp.tool_calls else None, "thought": resp.text, "before": before}
+        return {"call": resp.tool_calls[0] if resp.tool_calls else None, "thought": resp.text, "before": before,
+                "truncated": getattr(resp, "truncated", False)}
 
     def act(self, state: State) -> State:
         call = state.get("call")
@@ -255,6 +257,8 @@ class GraphAgent:
         call, outcome = state.get("call"), state["outcome"]
         after = self.toolbox.browser.snapshot()
         ok, feedback = verify(call, outcome, state.get("before"), after)
+        if call is None and state.get("truncated"):
+            feedback = "Your reply was cut off before you called a tool. Think briefly, then call one tool."
         last = state.get("last_call")
         if ok and call and last == (call.name, json.dumps(call.args, sort_keys=True)) and \
                 state.get("before") is not None and state["before"].fingerprint == after.fingerprint:
