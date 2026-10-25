@@ -87,6 +87,19 @@ def test_retries_after_a_timeout(monkeypatch):
     assert _llm_with(handler).extract("s", "p", [], {}, "x").data == {"n": 1} and len(attempts) == 2
 
 
+def test_repeated_timeouts_give_up_after_one_retry(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    attempts = []
+
+    def handler(request):
+        attempts.append(1)
+        raise httpx.ReadTimeout("hung", request=request)
+
+    with pytest.raises(httpx.ReadTimeout):
+        _llm_with(handler).extract("s", "p", [], {}, "x")
+    assert len(attempts) == 2
+
+
 def test_tool_calls_are_parsed():
     def handler(request):
         return httpx.Response(200, json={"choices": [{"message": {"content": "", "tool_calls": [

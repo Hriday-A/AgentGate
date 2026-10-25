@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-DEFAULT_MODEL = os.environ.get("AGENTGATE_MODEL", "gemini:gemini-3.5-flash")
+DEFAULT_MODEL = os.environ.get("AGENTGATE_MODEL", "gemini:gemma-4-26b-a4b-it")
 
 
 def _add_extraction_flags(p: argparse.ArgumentParser) -> None:

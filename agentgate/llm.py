@@ -1,7 +1,7 @@
 """Model backends shared by the agent and the extractor.
 
 A model is named "provider:model", e.g.
-  gemini:gemini-3.5-flash        (free tier via Google AI Studio)
+  gemini:gemma-4-26b-a4b-it      (free tier via Google AI Studio; also gemini:gemini-3.5-flash)
   ollama:llama3.2                (local)
   groq:… / openrouter:… / hf:…   (any OpenAI-compatible endpoint)
 
@@ -42,7 +42,7 @@ MAX_JSON_TOKENS = 8192
 
 # provider -> (base URL, env var holding the API key, default requests per minute)
 OPENAI_COMPAT = {
-    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", 10),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", 15),
     "ollama": (os.environ.get("OLLAMA_HOST", "http://localhost:11434") + "/v1", None, 0),
     "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", 30),
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", 20),
@@ -186,14 +186,18 @@ class OpenAICompatLLM:
 
     def _post(self, body: dict) -> dict:
         """POST with rate limiting, and exponential backoff on 429/5xx and dropped connections."""
+        transport_errors = 0
         for attempt in range(self.max_retries + 1):
             self.limiter.wait()
             try:
                 resp = self.client.post("/chat/completions", json=body)
-            except httpx.TransportError:  # timeouts and resets: hosted endpoints occasionally hang one request
-                if attempt == self.max_retries:
+            except httpx.TransportError:
+                # Retry a dropped or hung request once. A second timeout usually means this prompt makes the
+                # model generate until the deadline, and at temperature 0 every retry would do the same.
+                transport_errors += 1
+                if transport_errors > 1 or attempt == self.max_retries:
                     raise
-                time.sleep(2 ** attempt * 2)
+                time.sleep(2)
                 continue
             if resp.status_code == 429 or resp.status_code >= 500:
                 delay = _retry_delay(resp)

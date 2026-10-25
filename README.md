@@ -39,7 +39,7 @@ flowchart LR
 
 ```bash
 make setup                                   # venv, dependencies, Playwright Chromium
-make test                                    # 170+ tests, no API key needed
+make test                                    # 220+ tests, no API key needed
 export GEMINI_API_KEY=...                    # free key from Google AI Studio
 python -m agentgate run --smoke              # 6-task smoke run against the graph agent
 python -m agentgate run --difficulty hard    # or a slice of the 54-task suite
@@ -47,8 +47,9 @@ python -m agentgate extract-eval --n 30      # extraction accuracy on clean + sc
 python -m agentgate report runs/*/results.json   # Markdown comparison table across runs
 ```
 
-Any OpenAI-compatible provider works via `--model provider:model`: `gemini:…`, `ollama:…` (local), `groq:…`,
-`openrouter:…`, `hf:…`.
+The default model is `gemini:gemma-4-26b-a4b-it`: free, supports tool calls, and has a much larger free quota
+than `gemini-3.5-flash` (20 requests a day, not enough for one smoke run). Any OpenAI-compatible provider works
+via `--model provider:model`: `gemini:…`, `ollama:…` (local), `groq:…`, `openrouter:…`, `hf:…`.
 
 **API and dashboard without Docker** (needs Java 21, Node 22, PostgreSQL):
 
@@ -162,16 +163,54 @@ Create a GitHub OAuth App with callback `http://localhost:3000/login/oauth2/code
 
 ## Results
 
-Numbers are produced by the commands above and added here as runs complete.
+All numbers below are measured with the commands above, on free models: `gemma-4-26b-a4b-it` through the
+Gemini API free tier, and `qwen2.5:1.5b` running locally in Ollama (with `num_ctx 8192`; Ollama's default context
+truncates page snapshots). Samples are small (6 tasks per run), so
+one task is ~17 points; treat single-run differences of one task as noise.
 
-| Measurement | Result |
-|---|---|
-| Extraction, llama3.2 3B local, 6 clean PDFs | 100% on IDs, dates and PO numbers; 16.7% whole-document accuracy; validator flagged 6/6 wrong documents |
-| Response cache, same task twice (local llama3.2) | 58.0 s → 1.6 s; 7/7 model calls served from cache; 0 tokens on the re-run |
-| Agent suite, Gemini | _pending_ |
-| Extraction, Gemini, clean vs. scanned | _pending_ |
-| Local routing: p95 latency and API calls, before/after | _pending_ |
-| Learning rounds 1 → 2 → 3 | _pending_ |
+**Agent, 6-task smoke set** (`run --smoke`, easy + medium):
+
+| Configuration | Success | Easy | Medium | Avg steps | p50 / task | Model calls |
+|---|--:|--:|--:|--:|--:|--:|
+| ReAct baseline | **6/6** | 3/3 | 3/3 | 10.3 | 225 s | 68 |
+| Graph agent, first version | 4/6 | 3/3 | 1/3 | 17.5 | 361 s | 117 |
+| Graph agent + notes and loop rules (2 runs) | 5/6, 4/6 | 3/3 | 2/3, 1/3 | 20.7 | 328 s | 143 |
+| Graph + routing (easy steps on local 1.5B) | 4/4 ran | 1/1 | 3/3 | 15.8 | 416 s | 105 (21 local) |
+
+- **The simpler agent won.** With this model, ReAct (full conversation history) beat the planner/executor.
+  The graph agent's executor sees only the current page, so on paginated lists it bounced between page 1
+  and 2 until it ran out of steps. A `note` tool, a verifier rule for A→B→A→B ping-pong and an exact-repeat
+  rule fixed those loops, but medium tasks still sometimes exhaust the 30-step budget.
+- **Routing:** with easy steps on the local model (fail fast, escalate on any error), every task that ran
+  passed, and a fifth of model calls never left the laptop. Two tasks in that run hit a harness error
+  (two runs shared one portal server) and are excluded.
+- `baselines/smoke.json` is the graph agent's 4/6 run; the CI gate fails a PR that drops more than 20 points.
+
+**Feedback loop** (`learn --rounds 3 --difficulty hard --limit 6`, fresh seeds every round):
+
+| Round | Lessons in memory | Hard-task success |
+|---|--:|--:|
+| 1 | 0 | 4/6 (67%) |
+| 2 | 4 | **6/6 (100%)** |
+| 3 | 6 | 4/5 finished (one task stopped after repeated model timeouts) |
+
+**Extraction, local `qwen2.5:1.5b` + Tesseract OCR** (30 invoices, half scanned, `--scans ocr`):
+
+| | Model returns numbers | Model copies printed amounts, code parses them (`--amounts text`) |
+|---|--:|--:|
+| Whole document correct | 43.3% | **46.7%** |
+| Field accuracy | 92.3% | **94.0%** |
+| Subtotal / total | 93.3% / 93.3% | **100% / 100%** |
+| Scanned statements | 0% | 33.3% |
+| Line items | 46.7% | 46.7% |
+| Validator recall / precision | 100% / 100% | 100% / 100% |
+
+The validator flagged every incorrect document, so none would be entered silently. Line-item tables are
+what a 1.5B model can't copy reliably. With `gemini-3.5-flash`, 11/11 documents (6 of them scanned) were fully
+correct before the free-tier daily quota ran out.
+
+**Response cache:** the same task twice took 58.0 s → 1.6 s, with 7/7 model calls served from cache and 0
+tokens on the re-run.
 
 ## Repository layout
 

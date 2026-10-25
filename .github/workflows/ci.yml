@@ -82,10 +82,10 @@ jobs:
     needs: python
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60  # the free tier is rate-limited, so 6 agent tasks take ~30 min
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      AGENTGATE_MODEL: ${{ vars.AGENTGATE_MODEL || 'gemini:gemini-3.5-flash' }}
+      AGENTGATE_MODEL: ${{ vars.AGENTGATE_MODEL || 'gemini:gemma-4-26b-a4b-it' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -108,7 +108,7 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Run smoke eval
         if: steps.creds.outputs.available == 'true'
-        run: python -m agentgate run --smoke --label "PR #${{ github.event.number }}" --out runs
+        run: python -m agentgate run --smoke --concurrency 2 --label "PR #${{ github.event.number }}" --out runs
       - name: Report
         if: steps.creds.outputs.available == 'true' && always()
         run: |
