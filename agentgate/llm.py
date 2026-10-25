@@ -167,7 +167,8 @@ def _data_url(image: bytes) -> str:
 class OpenAICompatLLM:
     """Any endpoint that implements POST /chat/completions in OpenAI's format."""
 
-    def __init__(self, provider: str, model: str, timeout: float | None = None, max_retries: int = 5):
+    def __init__(self, provider: str, model: str, timeout: float | None = None, max_retries: int = 5,
+                 max_tool_tokens: int = MAX_TOOL_TOKENS):
         base_url, key_env, rpm = OPENAI_COMPAT[provider]
         self.spec = f"{provider}:{model}"
         # Local models on a laptop can take minutes per call; hosted ones shouldn't.
@@ -180,6 +181,7 @@ class OpenAICompatLLM:
                                    headers={"Authorization": f"Bearer {key}"})
         self.limiter = _limiter(provider, rpm)
         self.max_retries = max_retries
+        self.max_tool_tokens = max_tool_tokens
         self.json_schema_supported = True  # flipped off if the endpoint rejects response_format=json_schema
 
     def _post(self, body: dict) -> dict:
@@ -237,7 +239,7 @@ class OpenAICompatLLM:
         payload = self._post({
             "model": self.model,
             "temperature": 0,  # reproducible runs, and identical requests can be served from cache
-            "max_tokens": MAX_TOOL_TOKENS,
+            "max_tokens": self.max_tool_tokens,
             "messages": self._messages(system, history),
             "tools": [{"type": "function", "function": {
                 "name": t["name"], "description": t["description"], "parameters": t["input_schema"]}} for t in tools],
@@ -281,13 +283,13 @@ class OpenAICompatLLM:
         return JSONResponse(parse_json_object(text), text, *self._usage(payload), model=self.spec)
 
 
-def make_llm(spec: str):
-    """Build a backend from 'provider:model'."""
+def make_llm(spec: str, **options):
+    """Build a backend from 'provider:model'. Options go to OpenAICompatLLM (timeout, max_retries, …)."""
     provider, _, model = spec.partition(":")
     if not model:
         raise ValueError(f"Model spec {spec!r} must look like provider:model")
     if provider in OPENAI_COMPAT:
-        return OpenAICompatLLM(provider, model)
+        return OpenAICompatLLM(provider, model, **options)
     raise ValueError(f"Unknown provider {provider!r}; expected one of {sorted(OPENAI_COMPAT)}")
 
 

@@ -231,6 +231,10 @@ class BanditPolicy:
             self.path.write_text(json.dumps(self.stats, indent=1))
 
 
+# The small model is a fast path: if it can't answer quickly, the large model takes the step.
+SMALL_MODEL_OPTIONS = {"timeout": 90.0, "max_retries": 0, "max_tool_tokens": 1024}
+
+
 class RoutedLLM:
     LATENCY_PENALTY = 0.02  # reward lost per second of model latency
 
@@ -244,9 +248,15 @@ class RoutedLLM:
         step, failed = classify(history)
         arm = self.policy.choose(step, failed)
         t0 = time.perf_counter()
-        resp = (self.small if arm == "small" else self.large).complete(system, history, tools)
+        if arm == "small":
+            try:
+                resp = self.small.complete(system, history, tools)
+            except Exception:  # timeout, connection error, server error: same as no answer
+                resp = LLMResponse("", [])
+        else:
+            resp = self.large.complete(system, history, tools)
         if arm == "small" and not resp.tool_calls:
-            # Cascade: a small model that can't produce an action hands the step to the large one.
+            # Cascade: a small model that can't produce an action (or fails) hands the step to the large one.
             self.policy.update(f"{step}:{'fail' if failed else 'ok'}", "small", 0.0)
             arm = "large"
             resp = self.large.complete(system, history, tools)
@@ -268,8 +278,8 @@ class RoutedLLM:
 
 def build_llm(model: str, small_model: str | None = None, router: str = "rules",
               cache: str | Path | None = None, ledger: Ledger | None = None) -> MeteredLLM:
-    def layer(spec: str):
-        backend = make_llm(spec)
+    def layer(spec: str, **options):
+        backend = make_llm(spec, **options)
         return CachedLLM(backend, cache) if cache else backend
 
     large = layer(model)
@@ -277,4 +287,4 @@ def build_llm(model: str, small_model: str | None = None, router: str = "rules",
         return MeteredLLM(large, ledger)
     policy = BanditPolicy(Path(cache).with_name("bandit.json") if cache else ".cache/bandit.json") \
         if router == "bandit" else RulePolicy()
-    return MeteredLLM(RoutedLLM(layer(small_model), large, policy), ledger)
+    return MeteredLLM(RoutedLLM(layer(small_model, **SMALL_MODEL_OPTIONS), large, policy), ledger)

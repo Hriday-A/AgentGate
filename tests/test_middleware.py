@@ -57,6 +57,30 @@ def test_small_model_without_a_tool_call_escalates():
     assert resp.model == "gemini:large" and small.calls == 1 and large.calls == 1
 
 
+def test_small_model_error_escalates_instead_of_failing_the_task():
+    class Hangs(Fake):
+        def complete(self, *a):
+            self.calls += 1
+            raise TimeoutError("local model took too long")
+
+    small, large = Hangs("ollama:small"), Fake("gemini:large")
+    resp = RoutedLLM(small, large, RulePolicy()).complete("s", graph_prompt("Sign in"), [])
+    assert resp.model == "gemini:large" and small.calls == 1
+
+
+def test_small_model_is_built_to_fail_fast(monkeypatch):
+    from agentgate import middleware
+    built = {}
+
+    def fake_make_llm(spec, **options):
+        built[spec] = options
+        return Fake(spec)
+
+    monkeypatch.setattr(middleware, "make_llm", fake_make_llm)
+    middleware.build_llm("gemini:large", small_model="ollama:small")
+    assert built["ollama:small"]["max_retries"] == 0 and built["gemini:large"] == {}
+
+
 def test_bandit_learns_which_arm_works(tmp_path):
     policy = BanditPolicy(tmp_path / "bandit.json", epsilon=0.0)
     for _ in range(5):
